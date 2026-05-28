@@ -66,20 +66,25 @@ Xây dựng một **công cụ tự động hóa** giai đoạn EDA ban đầu, 
 
 ## Input (Đầu vào)
 
-### Bắt buộc
+### Data Files (file dữ liệu)
 
 | Input | Mô tả | Ví dụ |
 |-------|--------|-------|
-| **File CSV** | Dữ liệu thô cần đánh giá. Có thể là 1 hoặc nhiều file. | `sales_2024.csv`, `customers.csv` |
+| **CSV** | Text thuần, phân cách dấu phẩy. Format phổ biến nhất. | `sales_2024.csv` |
+| **Excel (.xlsx)** | Bảng tính, có thể nhiều sheet. Rất phổ biến từ business users. | `report_q4.xlsx` |
+| **Parquet** | Columnar binary format, có sẵn type info. Chuẩn data engineering. | `transactions.parquet` |
 
-### Tùy chọn (Optional)
+> Tất cả data files đều được chuyển thành **pandas DataFrame** trước khi vào pipeline xử lý → engine phân tích không cần biết file gốc là CSV hay Parquet.
+
+### Schema Files (file mô tả cấu trúc — tùy chọn)
 
 | Input | Mô tả | Ví dụ |
 |-------|--------|-------|
-| **File DBML** | Bản thiết kế cấu trúc database (bảng, cột, kiểu dữ liệu, quan hệ). Dùng để đối chiếu data thực tế với schema thiết kế. | `schema.dbml` |
-| **DB Schema** | Cấu trúc schema thực tế từ database (CREATE TABLE statements hoặc metadata). | Kết nối trực tiếp DB |
+| **DBML** | Bản thiết kế cấu trúc database (bảng, cột, kiểu dữ liệu, quan hệ). | `schema.dbml` |
 
-> **DBML là gì?** Database Markup Language — một ngôn ngữ mô tả cấu trúc database dưới dạng text, thường dùng với [dbdiagram.io](https://dbdiagram.io). Ví dụ:
+Khi có schema file, tool sẽ **đối chiếu** data thực tế với thiết kế: type mismatch, constraint violations, referential integrity.
+
+> **DBML là gì?** Database Markup Language — ngôn ngữ mô tả cấu trúc database dưới dạng text, thường dùng với [dbdiagram.io](https://dbdiagram.io). Ví dụ:
 > ```dbml
 > Table users {
 >   id integer [pk]
@@ -188,21 +193,31 @@ Các chart minh họa cho các vấn đề phát hiện được:
 
 ### ✅ Trong scope (MVP)
 
-1. Nhận file CSV làm input (1 hoặc nhiều file).
-2. Nhận file DBML / DB Schema để đối chiếu data thực tế vs thiết kế.
+**Input:**
+1. Nhận file dữ liệu: CSV, Excel (.xlsx), Parquet.
+2. Nhận file DBML để đối chiếu data thực tế vs thiết kế.
+
+**Processing:**
 3. Tự động profiling (thống kê mô tả, phát hiện kiểu dữ liệu).
 4. Phát hiện các điểm nhiễm data (missing, outliers, duplicates, inconsistencies).
 5. Đối chiếu data vs schema (type mismatch, constraint violations, referential integrity).
 6. Multi-table analysis (đánh giá quan hệ giữa nhiều bảng theo DBML).
 7. Đánh giá chất lượng data theo metrics chuẩn (completeness, validity...).
+
+**Output:**
 8. Xuất kết quả dạng JSON/YAML.
 9. LLM đọc JSON → viết nhận xét + gợi ý cải thiện.
 10. Kèm biểu đồ trực quan minh họa.
 
-### 🔜 Mở rộng sau (v2+)
+### 🔜 Mở rộng sau
 
-- Kết nối trực tiếp database (PostgreSQL, MySQL...).
+**v2 — Thêm Input formats:**
+- JSON (flat + nested, cần flatten logic).
+- SQL DDL (schema format phổ biến, cùng nhóm DBML parser).
 - Lưu lịch sử đánh giá để so sánh chất lượng data theo thời gian.
+
+**v3 — Kết nối trực tiếp:**
+- DB Connection (PostgreSQL, MySQL, SQL Server...) — cần xử lý credentials, bảo mật, pagination.
 
 ### ❌ Ngoài scope
 
@@ -210,6 +225,38 @@ Các chart minh họa cho các vấn đề phát hiện được:
 - Feature engineering / transformation.
 - Train model ML.
 - Real-time data streaming.
+
+---
+
+## Nguyên tắc kiến trúc
+
+> **Nguyên tắc số 1: Thiết kế modular, tối ưu cho scale.**
+> Toàn bộ project phải được thiết kế dạng module. Mỗi lớp (ingestion, analysis, reporting) hoạt động độc lập qua interface rõ ràng. Khi thêm format mới (JSON, DB connection...) ở v2/v3, chỉ cần thêm 1 module mới mà **không sửa pipeline hiện có**.
+
+### Ví dụ: Ingestion Layer dạng Plugin
+
+```
+Ingestion Layer (Plugin Architecture)
+├── CSVReader      →  pd.read_csv()      →  DataFrame
+├── ExcelReader    →  pd.read_excel()    →  DataFrame
+├── ParquetReader  →  pd.read_parquet()  →  DataFrame
+├── [v2] JSONReader    →  flatten + parse  →  DataFrame
+└── [v3] DBConnector   →  pd.read_sql()    →  DataFrame
+         ↓
+    Tất cả đều output DataFrame
+         ↓
+    Pipeline xử lý (chung cho mọi format)
+```
+
+Khi cần thêm format mới:
+- Viết 1 class `NewFormatReader` implement interface `DataReader`.
+- Đăng ký vào registry.
+- **Không sửa bất kỳ code nào** trong pipeline phân tích, LLM, hay reporting.
+
+Nguyên tắc này áp dụng cho **tất cả các lớp**, không chỉ ingestion:
+- **Schema Parser:** DBML parser, SQL DDL parser (v2) — cùng interface.
+- **Analysis Engine:** Mỗi loại phân tích (outlier, missing, distribution) là 1 module riêng.
+- **Output Formatter:** JSON, YAML, PDF — mỗi format 1 module.
 
 ---
 
