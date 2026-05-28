@@ -87,8 +87,13 @@ graph TD
 
 ### Layer 2: Khám chuyên sâu bằng AI truyền thống & Đối chiếu Lược đồ
 **Nhiệm vụ 1: Tìm rác dữ liệu ở mức độ từng dòng (Anomaly Detection).**
-- **Công nghệ chọn:** `PyOD` (Python Outlier Detection).
-- **Tại sao chọn?** `ydata-profiling` ở L1 chỉ cho bạn biết "Cột giá vé có bất thường". Nhưng `PyOD` (với các thuật toán như Isolation Forest) có thể chỉ đích danh "Dòng số 258 là dòng rác vì giá vé vô lý so với hạng ghế". Nó bóc tách độ dị biệt của từng dòng cụ thể.
+- **Công nghệ chọn:** `PyOD` với cơ chế **Ensemble (Hội đồng Giám khảo)** kết hợp 3 thuật toán: Isolation Forest, ECOD, và LOF (Local Outlier Factor).
+- **Tại sao chọn?** Theo định lý "No Free Lunch", không có thuật toán nào đúng cho mọi loại data. Ta kết hợp cả 3:
+  - *IForest:* Bắt rác tổng thể (Global anomalies).
+  - *LOF:* Bắt rác cục bộ (Ví dụ: Lương 50 triệu là bình thường ở cty, nhưng là rác nếu nằm trong tệp Sinh viên thực tập).
+  - *ECOD:* Chạy siêu tốc và trị được dữ liệu phân phối méo mó.
+  Hệ thống sẽ lấy điểm trung bình của 3 thuật toán này. Chỉ dòng nào bị cả 3 cùng "kết án", nó mới thực sự là rác.
+- **Tính năng Data Export:** Tự động xuất (dump) toàn bộ 100% các dòng dữ liệu dị biệt ra file CSV riêng biệt đính kèm báo cáo để Data Engineer xử lý.
 
 **Nhiệm vụ 2: Kiểm tra chéo giữa các bảng (Multi-table DBML).**
 - **Công nghệ chọn:** Thư viện `pydbml` kết hợp code tự viết bằng `Pandas`.
@@ -101,8 +106,8 @@ graph TD
 
 ### Layer 3.5: Hệ thống Biểu đồ Kép (Dual Visualization Engine)
 **Nhiệm vụ:** Sinh biểu đồ minh họa.
-- **Overview Charts:** Code tự vẽ các biểu đồ tổng quan cố định (Heatmap, Distribution).
-- **Diagnostic Charts (LLM-Directed):** Ở Layer 4, nếu con LLM thấy cột "Tuổi" có rác quá nặng, nó sẽ trả về lệnh JSON yêu cầu: "Vẽ ngay cho tao cái scatter plot của cột Tuổi". Code ở Layer 3.5 sẽ nhận lệnh, vẽ ảnh lưu ra file, và gửi link ảnh lại cho LLM để nó chèn vào báo cáo.
+- **Overview Charts (Trích xuất từ ydata):** Không "phát minh lại cái bánh xe" bằng cách tự code vẽ. Ta sẽ làm thao tác **Trích xuất (Extract)** các biểu đồ tuyệt đẹp đã được vẽ sẵn nằm trong bụng output của `ydata-profiling` để dùng luôn.
+- **Diagnostic Charts (LLM-Directed):** Ở Layer 4, nếu con LLM thấy cột "Tuổi" có rác quá nặng, nó sẽ trả về lệnh JSON yêu cầu: "Vẽ ngay cho tao cái scatter plot của cột Tuổi". Code ở Layer 3.5 sẽ nhận lệnh, dùng Python tự vẽ biểu đồ, trong đó bôi đỏ toàn bộ 100% các điểm rác đè lên dữ liệu thường để minh họa. Sau đó gửi link ảnh lại cho LLM.
 
 ### Layer 4: Đội ngũ Báo cáo AI (Multi-Agent Orchestration)
 **Nhiệm vụ:** Viết báo cáo Markdown hoàn chỉnh, sinh động, dễ hiểu.
