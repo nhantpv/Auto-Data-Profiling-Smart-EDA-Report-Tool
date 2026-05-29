@@ -20,8 +20,8 @@ Trong các dự án Data/AI, giai đoạn đầu tiên luôn là **Exploratory D
 
 Xây dựng một **công cụ tự động hóa** giai đoạn EDA ban đầu, giúp:
 - Tự động phân tích và phát hiện các vấn đề chất lượng dữ liệu (data contamination).
-- Đánh giá dữ liệu theo các metrics chuẩn.
-- Dùng LLM đóng vai Senior Data Scientist để đưa ra nhận xét và gợi ý hướng cải thiện.
+- Đánh giá dữ liệu theo metrics chuẩn DAMA-DMBOK (Completeness, Validity, Accuracy,…).
+- Dùng LLM đóng vai Senior Data Scientist để đưa ra nhận xét và gợi ý hướng cải thiện, **kèm Guardrail chống bịa số liệu**.
 
 > **Bản chất sản phẩm:** Đây là công cụ **chẩn đoán** (diagnostic tool) — chỉ ra vấn đề và gợi ý hướng xử lý, **KHÔNG** tự động xử lý/clean dữ liệu.
 
@@ -36,29 +36,35 @@ Xây dựng một **công cụ tự động hóa** giai đoạn EDA ban đầu, 
 └──────────┬───────────┘
            ▼
 ┌──────────────────────┐
-│    ML ENGINE         │
-│  (Thuật toán ML      │
-│   truyền thống)      │
-│                      │
-│  • Phát hiện điểm    │
-│    nhiễm data        │
-│  • Đánh giá data     │
-│    theo metrics      │
+│  DETERMINISTIC       │
+│  ENGINES (L1 & L2)   │
+│  • fg-data-profiling  │
+│  • PyOD Ensemble      │
+│  • DBML Validator     │
+└──────────┬───────────┘
+           ▼
+┌──────────────────────┐
+│  SEVERITY STACK      │
+│  (Layer 2.5)         │
+│  • MCAR/MAR/MNAR      │
+│  • Calibrator         │
+│  • CompoundEscalator  │
+│  • Aggregator         │
 └──────────┬───────────┘
            ▼
 ┌──────────────────────┐
 │   OUTPUT CHÍNH       │
-│  File có cấu trúc    │
-│  (JSON / YAML)       │
+│  3 file JSON chuẩn   │
+│  (Pydantic + DAMA)   │
 └──────────┬───────────┘
            ▼
 ┌──────────────────────┐
 │      LLM LAYER       │
-│  Đọc JSON kết quả    │
-│  → Suggest hướng     │
-│    cải thiện data     │
-│  → Kèm biểu đồ      │
-│    trực quan          │
+│  Multi-Agent          │
+│  + Guardrail đối     │
+│    chiếu số liệu     │
+│  → Báo cáo Markdown  │
+│    + Biểu đồ         │
 └──────────────────────┘
 ```
 
@@ -109,11 +115,12 @@ Tool sử dụng các thuật toán Machine Learning cổ điển (không phải
 
 | Nhiệm vụ | Kỹ thuật ML có thể dùng |
 |-----------|--------------------------|
-| Phát hiện outliers | Isolation Forest, LOF, Z-score, IQR |
+| Phát hiện outliers | PyOD Ensemble: Isolation Forest + ECOD + LOF |
 | Đánh giá phân phối dữ liệu | Statistical tests (Shapiro-Wilk, K-S test) |
-| Phát hiện missing pattern | Pattern mining, MCAR/MAR/MNAR classification |
-| Phát hiện data bất thường | DBSCAN clustering, One-class SVM |
-| Đánh giá chất lượng tổng thể | Composite quality score dựa trên nhiều metrics |
+| Phát hiện missing pattern | MCAR/MAR/MNAR classification (Little's test + Logistic Regression) |
+| Phát hiện data bất thường | Ensemble voting (Average Score + Threshold) |
+| Đánh giá mức độ nghiêm trọng | Severity Stack (Calibrator + CompoundEscalator + Aggregator) |
+| Đánh giá chất lượng tổng thể | Dataset Verdict: READY / WARN / NOT_READY |
 
 ### Đánh giá theo Metrics
 
@@ -139,7 +146,12 @@ Nếu người dùng cung cấp file DBML, tool sẽ đối chiếu thêm:
 
 ### Output 1 — File có cấu trúc (Core output)
 
-File JSON hoặc YAML chứa toàn bộ kết quả phân tích. Đây là output **chính** của tool, được thiết kế để:
+File JSON chứa toàn bộ kết quả phân tích, được validate bởi Pydantic và tuân thủ chuẩn DAMA-DMBOK. Hệ thống xuất 3 file:
+- `data_quality_findings.json` — báo cáo chất lượng dữ liệu
+- `schema_evaluation_findings.json` — báo cáo đối chiếu schema
+- `dataset_verdict.json` — phán quyết tổng thể (READY/WARN/NOT_READY)
+
+Đây là output **chính** của tool, được thiết kế để:
 - Hệ thống khác có thể đọc và xử lý tiếp (machine-readable).
 - Làm input cho LLM ở bước tiếp theo.
 
@@ -148,34 +160,44 @@ File JSON hoặc YAML chứa toàn bộ kết quả phân tích. Đây là outpu
   "dataset": "sales_2024.csv",
   "summary": {
     "rows": 10000,
-    "columns": 15,
-    "overall_quality_score": 72.5
+    "columns": 15
   },
   "columns": {
     "age": {
-      "type": "numeric",
-      "missing_pct": 5.2,
-      "outliers_count": 23,
-      "outlier_method": "IQR",
-      "distribution": "right-skewed",
-      "quality_flags": ["HAS_OUTLIERS", "MODERATE_MISSING"]
+      "type": "Numeric",
+      "n_missing": 520,
+      "p_missing": 0.052,
+      "missingness_mechanism": "MAR",
+      "additional_metrics": {
+        "mean": 35.5,
+        "std": 12.3,
+        "min": -5,
+        "max": 150
+      }
     }
   },
-  "contamination_points": [
+  "anomalies": [
     {
-      "column": "age",
-      "issue": "OUTLIER",
+      "issue_type": "OUTLIER_ENSEMBLE",
       "severity": "HIGH",
-      "detail": "23 values > 120, likely data entry errors",
-      "affected_rows": [102, 455, 789]
+      "dq_dimensions": ["Accuracy"],
+      "ml_impact": ["training_bias"],
+      "compound_severity": "CRITICAL",
+      "confidence": 0.95,
+      "affected_count": 23,
+      "affected_percent": 0.0023,
+      "top_10_samples": [
+        {"row_index": 102, "age": 150, "_anomaly_score": 0.99}
+      ],
+      "diagnostic_chart": "output/charts/age_scatter.png"
     }
   ]
 }
 ```
 
-### Output 2 — LLM Narrative Report
+### Output 2 — LLM Narrative Report (với Guardrail chống Hallucination)
 
-LLM đọc file JSON ở trên và viết nhận xét bằng ngôn ngữ tự nhiên, đóng vai Senior Data Scientist:
+LLM đọc file JSON ở trên và viết nhận xét bằng ngôn ngữ tự nhiên, đóng vai Senior Data Scientist. Mọi con số và tên cột trong báo cáo đều được **Guardrail (Allowed-Set + Tolerance)** kiểm tra đối chiếu với JSON gốc trước khi gửi cho người dùng:
 
 > *"Dataset `sales_2024.csv` có chất lượng ở mức trung bình (72.5/100). Vấn đề nghiêm trọng nhất là cột `age` có 23 giá trị > 120, rất có thể là lỗi nhập liệu — nên kiểm tra lại nguồn dữ liệu hoặc xử lý bằng cách cap tại percentile 99. Cột `income` bị missing 23%, phân bố missing không ngẫu nhiên (MAR) — nên xem xét impute bằng median theo nhóm `job_category`..."*
 
