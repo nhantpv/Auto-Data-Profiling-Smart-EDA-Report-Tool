@@ -9,13 +9,13 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
 2. **Flexible Expansion (Mở rộng linh hoạt):** Các class Pydantic sẽ có một trường `additional_metrics: Dict[str, Any]` để chứa các chỉ số thống kê dị biệt mà không làm gãy cấu trúc lõi.
 3. **Anomaly Handling (Xử lý dung lượng dữ liệu rác):** Áp dụng chiến lược "Summarization + Top-K". Thay vì gửi hàng chục ngàn dòng outliers, JSON chỉ chứa: Tổng số lượng lỗi, tỷ lệ %, và **Top 10 dòng rác tồi tệ nhất** (Anomaly Score cao nhất).
 4. **Multimodal Vision (Phân tích đa phương thức):** Tận dụng năng lực Vision của LLM (như GPT-4o). JSON sẽ chứa đường link dẫn tới các biểu đồ. Lúc gọi AI, ta gửi cả JSON VÀ hình ảnh Biểu đồ (để AI nhìn thấy bức tranh tổng thể).
-5. **Đồ thị (Charts) lai ghép:** Đối với Overview Charts, không code vẽ lại mà **trích xuất (extract)** trực tiếp từ output của `ydata-profiling`. Đối với Diagnostic Charts, code Python sẽ vẽ **toàn bộ 100% các điểm rác** (VD: 1000 điểm đỏ) đè lên dữ liệu thường, giúp hiển thị toàn cảnh dù LLM chỉ đọc Top 10.
+5. **Đồ thị (Charts) lai ghép:** Đối với Overview Charts, không code vẽ lại mà **trích xuất (extract)** trực tiếp từ output của `fg-data-profiling`. Đối với Diagnostic Charts, code Python sẽ vẽ **toàn bộ 100% các điểm rác** (VD: 1000 điểm đỏ) đè lên dữ liệu thường, giúp hiển thị toàn cảnh dù LLM chỉ đọc Top 10.
 6. **Data Export (Bắt trọn dữ liệu):** Bên cạnh báo cáo Markdown, hệ thống tự động xuất (dump) toàn bộ 100% các dòng dữ liệu bị lỗi ra các file riêng biệt (VD: `output/anomalies/outliers_export.csv`) để Data Engineer có thể tải về xử lý.
 
 ## 3. Data Contracts (Cấu trúc JSON)
 
 ### 3.1. data_quality_findings.json (Gửi cho Data QA Agent)
-Đầu ra kết hợp từ `ydata-profiling` và `PyOD`.
+Đầu ra kết hợp từ `fg-data-profiling` và `PyOD Ensemble (IForest + ECOD + LOF)`.
 
 ```json
 {
@@ -25,6 +25,8 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
     "n_var": 12,
     "memory_size": 85632,
     "p_cells_missing": 0.08,
+    "n_duplicates": 12,
+    "p_duplicates": 0.0135,
     "overview_charts": {
       "correlation_heatmap": "output/charts/heatmap.png",
       "missing_matrix": "output/charts/missing.png"
@@ -53,7 +55,7 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
   },
   "anomalies": [
     {
-      "issue_type": "OUTLIER_ISOLATION_FOREST",
+      "issue_type": "OUTLIER_ENSEMBLE",
       "description": "Phát hiện 25 dòng dị biệt (2.8% data)",
       "severity": "HIGH",
       "top_10_samples": [

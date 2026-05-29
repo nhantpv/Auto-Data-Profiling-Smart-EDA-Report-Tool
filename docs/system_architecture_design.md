@@ -34,7 +34,7 @@ graph TD
 
     %% ENGINES (L1 & L2)
     subgraph L1_L2 ["Layer 1 & 2: Deterministic & ML Engines (Bộ máy phân tích)"]
-        E1["ydata-profiling (L1)"]:::engine
+        E1["fg-data-profiling (L1)"]:::engine
         E2["PyOD Anomaly (L2)"]:::engine
         E3["DBML Validator (L2)"]:::engine
     end
