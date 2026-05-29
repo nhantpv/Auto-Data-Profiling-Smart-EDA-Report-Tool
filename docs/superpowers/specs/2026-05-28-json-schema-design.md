@@ -1,7 +1,7 @@
 # Design Spec: JSON Ontology & Data Ingestion (Sub-project 1)
 
 ## 1. Goal
-Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra từ Layer 1 & 2 thành 2 file JSON, đóng vai trò là "Ngôn ngữ giao tiếp" duy nhất giữa hệ thống phân tích Python và đội ngũ LLM Agents. Đồng thời xác định luồng dữ liệu đầu vào (Ingestion).
+Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra từ Layer 1, 2 & 2.5 thành 3 file JSON, đóng vai trò là "Ngôn ngữ giao tiếp" duy nhất giữa hệ thống phân tích Python và đội ngũ LLM Agents. Đồng thời xác định luồng dữ liệu đầu vào (Ingestion).
 
 ## 2. Core Architecture Decisions (Các quyết định đã chốt)
 
@@ -38,6 +38,7 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
       "n_missing": 177,
       "p_missing": 0.19865,
       "n_zeros": 0,
+      "missingness_mechanism": "MAR",
       "additional_metrics": {
         "mean": 29.69,
         "std": 14.52,
@@ -58,6 +59,10 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
       "issue_type": "OUTLIER_ENSEMBLE",
       "description": "Phát hiện 25 dòng dị biệt (2.8% data)",
       "severity": "HIGH",
+      "dq_dimensions": ["Accuracy"],
+      "ml_impact": ["training_bias"],
+      "compound_severity": "HIGH",
+      "confidence": 0.92,
       "top_10_samples": [
         {"PassengerId": 259, "Age": 35, "Fare": 512.3292, "anomaly_score": 0.99},
         {"PassengerId": 738, "Age": 35, "Fare": 512.3292, "anomaly_score": 0.98}
@@ -96,6 +101,28 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
       ]
     }
   ]
+}
+```
+
+### 3.3. dataset_verdict.json (Phán quyết Tổng thể — từ C2 Aggregator)
+Đầu ra từ module `severity/aggregator.py`. Trả lời câu hỏi: "Dữ liệu này dùng được chưa?"
+
+```json
+{
+  "dataset_meta": {
+    "file_name": "titanic.csv",
+    "n": 891,
+    "n_var": 12
+  },
+  "verdict": "WARN",
+  "verdict_rationale": "2 cột có severity HIGH, 1 lỗi CRITICAL ở ORPHAN_FOREIGN_KEY",
+  "summary": {
+    "total_issues": 5,
+    "critical": 1,
+    "high": 2,
+    "medium": 1,
+    "info": 1
+  }
 }
 ```
 

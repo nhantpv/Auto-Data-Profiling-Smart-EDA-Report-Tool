@@ -28,10 +28,14 @@
 - Create: `src/ontology/__init__.py`
 - Create: `src/ingestion/__init__.py`
 - Create: `src/engines/__init__.py`
+- Create: `src/severity/__init__.py`
+- Create: `src/guardrail/__init__.py`
 - Create: `tests/__init__.py`
 - Create: `tests/ontology/__init__.py`
 - Create: `tests/ingestion/__init__.py`
 - Create: `tests/engines/__init__.py`
+- Create: `tests/severity/__init__.py`
+- Create: `tests/guardrail/__init__.py`
 - Create: `tests/conftest.py`
 - Create: `tests/fixtures/clean_10rows.csv`
 - Create: `tests/fixtures/dirty_with_outliers.csv`
@@ -72,10 +76,14 @@ src/__init__.py
 src/ontology/__init__.py
 src/ingestion/__init__.py
 src/engines/__init__.py
+src/severity/__init__.py
+src/guardrail/__init__.py
 tests/__init__.py
 tests/ontology/__init__.py
 tests/ingestion/__init__.py
 tests/engines/__init__.py
+tests/severity/__init__.py
+tests/guardrail/__init__.py
 ```
 
 - [ ] **Step 3: Create test fixtures**
@@ -215,6 +223,10 @@ class TestAnomalyRecord:
             issue_type="OUTLIER_ENSEMBLE",
             description="Found 10 outliers",
             severity="HIGH",
+            dq_dimensions=["Accuracy"],
+            ml_impact=["training_bias"],
+            compound_severity="HIGH",
+            confidence=0.92,
             affected_count=10,
             affected_percent=0.01,
             top_10_samples=[{"id": 1, "score": 0.99}],
@@ -222,6 +234,8 @@ class TestAnomalyRecord:
             full_anomalies_export_path="path/to/export.csv",
         )
         assert rec.severity == "HIGH"
+        assert rec.dq_dimensions == ["Accuracy"]
+        assert rec.compound_severity == "HIGH"
         assert len(rec.top_10_samples) == 1
 
     def test_anomaly_optional_fields(self):
@@ -271,10 +285,20 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'ontology'`
 """Pydantic data contracts for the Smart EDA pipeline.
 
 These models define the strict JSON schema (Layer 3) that bridges
-deterministic Python engines (L1/L2) and LLM agents (L4).
+deterministic Python engines (L1/L2/L2.5) and LLM agents (L4).
+Includes C1 fields: dq_dimensions, ml_impact, compound_severity, confidence.
 """
+from enum import Enum
 from pydantic import BaseModel, Field
 from typing import Dict, List, Any, Optional
+
+
+class Severity(str, Enum):
+    """Standardized severity levels for all findings."""
+    INFO = "INFO"
+    WARN = "WARN"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 
 class DatasetMeta(BaseModel):
@@ -295,6 +319,7 @@ class ColumnStats(BaseModel):
     n_missing: int
     p_missing: float
     n_distinct: Optional[int] = None
+    missingness_mechanism: Optional[str] = None  # "MCAR" | "MAR" | "MNAR" (from C2 module a)
     additional_metrics: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -302,7 +327,11 @@ class AnomalyRecord(BaseModel):
     """A single data quality finding (outlier cluster, duplicate batch, etc.)."""
     issue_type: str                 # "OUTLIER_ENSEMBLE" | "DUPLICATE" | ...
     description: str
-    severity: str                   # "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+    severity: Severity              # C1: Enum instead of free string
+    dq_dimensions: List[str] = Field(default_factory=list)  # C1: DAMA dimensions
+    ml_impact: List[str] = Field(default_factory=list)       # C1: e.g. ["training_bias"]
+    compound_severity: Optional[Severity] = None             # C1: from CompoundEscalator (C2d)
+    confidence: Optional[float] = None                       # C1: 0.0 ~ 1.0
     affected_count: int             # how many rows affected
     affected_percent: float         # 0.0 ~ 1.0
     top_10_samples: List[Dict[str, Any]]

@@ -1,5 +1,7 @@
 # JSON Ontology & Data Ingestion Implementation Plan
 
+> ⚠️ **SUPERSEDED:** Bản plan này đã được thay thế bởi phiên bản chi tiết hơn tại [`2026-05-29-deterministic-core-part1.md`](./2026-05-29-deterministic-core-part1.md) (Project Skeleton + Pydantic Models + CSV Reader với C1 fields) và [`2026-05-29-deterministic-core-part2.md`](./2026-05-29-deterministic-core-part2.md) (Engines + Findings Builder). Giữ file này làm tham chiếu lịch sử.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the strict Pydantic JSON schemas (Layer 3) and the smart CSV data ingestion module with auto-sampling (Layer 1).

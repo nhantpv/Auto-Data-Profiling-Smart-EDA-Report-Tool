@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the 3 core analysis engines (Profiling, Anomaly, Schema) and the Findings Builder that merges their outputs into validated JSON.
+**Goal:** Build the 3 core analysis engines (Profiling, Anomaly, Schema) and the Findings Builder that merges their outputs into validated JSON with C1 fields (DAMA dimensions, ml_impact, compound_severity).
 
 **Architecture:** Each engine is a thin wrapper around a library (fg-data-profiling, PyOD, pydbml). Findings Builder consumes their raw outputs and produces Pydantic-validated JSON files.
 
@@ -529,7 +529,10 @@ def build_data_quality_findings(
         anomalies.append(AnomalyRecord(
             issue_type="OUTLIER_ENSEMBLE",
             description=f"Phát hiện {n_outliers} dòng dị biệt ({n_outliers/meta.n*100:.1f}% data)",
-            severity="HIGH" if n_outliers / meta.n > 0.05 else "MEDIUM",
+            severity=Severity.HIGH if n_outliers / meta.n > 0.05 else Severity.WARN,
+            dq_dimensions=["Accuracy"],
+            ml_impact=["training_bias"] if n_outliers / meta.n > 0.05 else [],
+            confidence=round(float(np.mean(outlier_scores)), 4) if outlier_scores else None,
             affected_count=n_outliers,
             affected_percent=round(n_outliers / meta.n, 4),
             top_10_samples=top_samples,
@@ -542,7 +545,9 @@ def build_data_quality_findings(
         anomalies.append(AnomalyRecord(
             issue_type="DUPLICATE",
             description=f"Phát hiện {meta.n_duplicates} dòng trùng lặp hoàn toàn ({meta.p_duplicates*100:.1f}% data)",
-            severity="MEDIUM" if meta.p_duplicates < 0.05 else "HIGH",
+            severity=Severity.WARN if meta.p_duplicates < 0.05 else Severity.HIGH,
+            dq_dimensions=["Uniqueness"],
+            ml_impact=["training_bias"] if meta.p_duplicates > 0.05 else [],
             affected_count=meta.n_duplicates,
             affected_percent=meta.p_duplicates,
             top_10_samples=dup_samples,
@@ -646,3 +651,7 @@ git add tests/test_integration.py
 git commit -m "test: end-to-end integration test for deterministic core pipeline"
 git push
 ```
+
+---
+
+> ⚠️ **Lưu ý:** Phần này (Part 2) chưa bao gồm các module C2 Severity Stack (`severity/calibrator.py`, `severity/missingness.py`, `severity/compound.py`, `severity/aggregator.py`) và C3 Guardrail (`guardrail/validator.py`, `guardrail/column_checker.py`). Các module này sẽ được triển khai trong **Part 3** sau khi core pipeline hoạt động ổn định. Hiện tại, `compound_severity` và `missingness_mechanism` được để `None` (sẽ được điền bởi severity stack ở Part 3).
