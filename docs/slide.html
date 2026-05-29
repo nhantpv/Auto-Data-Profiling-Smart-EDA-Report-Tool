@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VSF-EDA · Pitch Deck</title>
+<style>
+  :root{
+    --bg:#0b1020; --bg2:#11182e; --card:#161f3a; --card2:#1c294b;
+    --ink:#e8edf7; --muted:#9fb0d0; --line:#2a3760;
+    --cyan:#38e1d6; --indigo:#6d7bff; --emerald:#46e08a; --amber:#ffcf5c; --rose:#ff7a90;
+    --grad:linear-gradient(120deg,#6d7bff,#38e1d6);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 80% -10%,#1b2750 0%,var(--bg) 55%) fixed;
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif;
+    -webkit-font-smoothing:antialiased; overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:4.2vh 6vw 6vh;overflow:auto;animation:fade .45s ease;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  .slide::-webkit-scrollbar{width:8px}
+  .slide::-webkit-scrollbar-thumb{background:var(--line);border-radius:8px}
+
+  h1{font-size:clamp(30px,4.6vw,62px);line-height:1.05;letter-spacing:-.5px}
+  h2{font-size:clamp(24px,3.1vw,40px);line-height:1.12;margin-bottom:.5em;letter-spacing:-.4px}
+  h3{font-size:clamp(17px,1.5vw,22px);color:var(--cyan);margin:.2em 0 .5em;font-weight:700}
+  p,li{font-size:clamp(14px,1.18vw,18px);line-height:1.55;color:var(--ink)}
+  .muted{color:var(--muted)}
+  .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .kicker{font-size:13px;letter-spacing:3px;text-transform:uppercase;color:var(--cyan);font-weight:700;margin-bottom:.8em}
+  .lead{font-size:clamp(16px,1.5vw,22px);color:var(--muted);max-width:62ch}
+  ul{padding-left:1.1em;margin:.3em 0}
+  li{margin:.34em 0}
+  b,strong{color:#fff}
+  .tag{display:inline-block;padding:.18em .7em;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--muted);margin:.2em .25em 0 0}
+  .pill{display:inline-block;padding:.2em .6em;border-radius:7px;font-size:12px;font-weight:700}
+  .pill.cy{background:rgba(56,225,214,.16);color:var(--cyan)}
+  .pill.em{background:rgba(70,224,138,.16);color:var(--emerald)}
+  .pill.am{background:rgba(255,207,92,.16);color:var(--amber)}
+  .pill.ro{background:rgba(255,122,144,.16);color:var(--rose)}
+  .pill.in{background:rgba(109,123,255,.18);color:#aeb6ff}
+
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:18px 20px}
+  .card.tight{padding:14px 16px}
+  .card h3{margin-top:0}
+  .num{font-size:clamp(26px,3.4vw,44px);font-weight:800;line-height:1}
+
+  table{width:100%;border-collapse:collapse;font-size:clamp(12px,1.05vw,15.5px)}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--cyan);font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.6px}
+  tr:hover td{background:rgba(109,123,255,.06)}
+  .ok{color:var(--emerald)} .no{color:var(--rose)} .wn{color:var(--amber)}
+
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;margin-top:10px}
+  .step{flex:1;min-width:150px;background:linear-gradient(180deg,var(--card2),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px;position:relative}
+  .step .lab{font-size:12px;color:var(--cyan);font-weight:700;letter-spacing:1px}
+  .step .ti{font-weight:700;margin:.25em 0;font-size:15px}
+  .step .io{font-size:12px;color:var(--muted);line-height:1.4}
+  .arrow{display:flex;align-items:center;color:var(--indigo);font-size:26px;padding:0 6px}
+
+  .foot{position:absolute;bottom:18px;left:6vw;right:6vw;display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--muted)}
+  .progress{position:fixed;top:0;left:0;height:3px;background:var(--grad);z-index:20;transition:width .3s;width:0}
+  .nav{position:fixed;bottom:14px;right:18px;display:flex;gap:8px;z-index:20}
+  .nav button{background:var(--card);border:1px solid var(--line);color:var(--ink);width:38px;height:34px;border-radius:9px;cursor:pointer;font-size:16px}
+  .nav button:hover{border-color:var(--cyan)}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em;color:#bfe9ff}
+  .json{background:#0a0f20;border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;line-height:1.5;color:#cfe;overflow:auto;white-space:pre}
+  .k{color:#8fb6ff}.s{color:#9be6a8}.c{color:#ffd27a}
+  .hl{border-left:3px solid var(--cyan);padding-left:14px}
+  .hl.am{border-color:var(--amber)} .hl.ro{border-color:var(--rose)} .hl.em{border-color:var(--emerald)}
+  .spec{border:1px dashed var(--indigo);border-radius:12px;padding:14px 18px;background:rgba(109,123,255,.06)}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="progress" id="prog"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <div class="kicker">Automated EDA + Data Quality · LLM-Assisted Reporting</div>
+    <h1>VSF-EDA<br><span class="grad">Tự động khám phá dữ liệu &amp; phát hiện lỗi chất lượng — báo cáo bằng AI nhưng <u>không bịa số</u>.</span></h1>
+    <p class="lead" style="margin-top:22px">Một pipeline 4 tầng theo triết lý <b>“Deterministic-First, LLM-Last”</b>: máy tính &amp; ML tìm lỗi bằng toán học, AI chỉ <i>đọc kết quả</i> và viết báo cáo — bị khóa chặt để không được bịa số liệu.</p>
+    <div style="margin-top:26px">
+      <span class="tag">Python</span><span class="tag">ydata-profiling</span><span class="tag">PyOD ensemble</span><span class="tag">pydbml</span><span class="tag">Pydantic</span><span class="tag">OpenAI multi-agent</span>
+    </div>
+    <div class="foot"><span>Pitch deck · Tiếng Việt</span><span>2026-05-29</span></div>
+  </section>
+
+  <!-- 2 · PROBLEM -->
+  <section class="slide">
+    <div class="kicker">Vấn đề</div>
+    <h2>EDA thủ công thì chậm — còn để LLM tự đọc dữ liệu thì <span class="grad">bịa số</span>.</h2>
+    <div class="grid g3" style="margin-top:10px">
+      <div class="card"><h3>😩 Thủ công &amp; lặp lại</h3><p>Mỗi dataset mới, Data Scientist lại tốn hàng giờ viết lại cùng một mớ code thống kê, vẽ biểu đồ, soi missing/outlier.</p></div>
+      <div class="card"><h3>🧱 Lỗi rải rác, không chuẩn</h3><p>Các tool hiện có chấm lỗi <b>độc lập</b>, không gán chuẩn quốc tế (DAMA/ISO), không có verdict “dữ liệu này dùng được chưa?”.</p></div>
+      <div class="card"><h3>🤖 LLM bịa số liệu</h3><p>Ném cả bảng cho ChatGPT → nó viết hay nhưng <b>tự chế con số</b>. Trong DataOps, một con số sai = mất hết niềm tin.</p></div>
+    </div>
+    <p class="lead" style="margin-top:22px"><b>Câu hỏi cốt lõi:</b> làm sao có báo cáo EDA tự động, đẹp, dễ đọc <i>như AI viết</i> — mà mọi con số đều <b>đảm bảo đúng 100%</b> so với dữ liệu gốc?</p>
+  </section>
+
+  <!-- 3 · RESEARCH LANDSCAPE -->
+  <section class="slide">
+    <div class="kicker">Tổng quan nghiên cứu</div>
+    <h2>Chúng tôi đã khảo sát toàn cảnh trước khi thiết kế.</h2>
+    <div class="grid g4" style="margin:6px 0 18px">
+      <div class="card center"><div class="num grad">47</div><p class="muted">bài báo khoa học<br>(profiling, DQ, anomaly, hallucination)</p></div>
+      <div class="card center"><div class="num grad">32</div><p class="muted">repo mã nguồn mở<br>được đọc &amp; lập wiki</p></div>
+      <div class="card center"><div class="num grad">16</div><p class="muted">công cụ thương mại<br>(Monte Carlo, Anomalo…)</p></div>
+      <div class="card center"><div class="num grad">10</div><p class="muted">khoảng trống nghiên cứu<br>(gaps) được định danh</p></div>
+    </div>
+    <div class="grid g2">
+      <div class="card tight"><h3>Nền tảng học thuật</h3><p>Abedjan 2015 (profiling), Liu 2008 (Isolation Forest), Zhao 2019 (PyOD/ADBench), Breck 2019 / Caveness 2020 (TFDV), Schelter 2018 (Deequ), Gupta 2021 (<b>IBM DQ Toolkit</b> — gần nhất với ý tưởng ML-readiness), Malin 2024 (faithfulness của LLM), Huang 2023 (hallucination).</p></div>
+      <div class="card tight"><h3>Hệ sinh thái công cụ</h3><p><b>Profiling:</b> ydata-profiling, DataProfiler, Sweetviz. <b>DQ/validation:</b> Great Expectations, Soda, Deequ, pandera, DataKitchen TestGen. <b>Anomaly:</b> PyOD, deepchecks. <b>Drift:</b> Evidently, NannyML, alibi-detect. <b>LLM-narrative:</b> LIDA, PandasAI, Vanna.</p></div>
+    </div>
+  </section>
+
+  <!-- 4 · STRENGTHS / WEAKNESSES -->
+  <section class="slide">
+    <div class="kicker">Điểm mạnh &amp; điểm yếu của công cụ hiện có</div>
+    <h2>Mỗi nhóm giỏi một mảng — nhưng <span class="grad">không ai ghép đủ chuỗi</span>.</h2>
+    <table>
+      <tr><th>Nhóm / Công cụ</th><th>Điểm mạnh</th><th>Điểm yếu (khoảng trống)</th></tr>
+      <tr><td><b>ydata-profiling</b> (13k★)</td><td class="ok">Thống kê L1 cực đầy đủ, biểu đồ đẹp, xuất JSON</td><td class="no">Chỉ mô tả; không phán xét, không LLM, không đa bảng</td></tr>
+      <tr><td><b>PyOD / deepchecks</b></td><td class="ok">Phát hiện outlier/leakage mạnh (ensemble)</td><td class="no">Chỉ là “bộ sưu tập detector”, không có verdict tổng</td></tr>
+      <tr><td><b>Great Expectations / Soda</b></td><td class="ok">Validation chặt theo rule</td><td class="no">Cần người <b>tự khai báo rule</b>; severity tùy tiện; không tự khám phá</td></tr>
+      <tr><td><b>DataKitchen TestGen</b> (OSS)</td><td class="ok">Auto-discovery + chấm điểm theo DAMA</td><td class="wn">LLM dùng để <b>sinh test</b>, không phải tường thuật finding; công thức chấm điểm đóng</td></tr>
+      <tr><td><b>Monte Carlo / Anomalo / Acceldata</b></td><td class="ok">Đã có kiến trúc deterministic→LLM-narrative (thương mại)</td><td class="no">Đóng, đắt; <b>không ai công bố</b> ràng buộc “LLM cấm bịa số” hay tính tái lập</td></tr>
+      <tr><td><b>LIDA / PandasAI / Vanna</b></td><td class="ok">LLM tạo biểu đồ / trả lời truy vấn</td><td class="no">LLM <b>chạm trực tiếp dữ liệu thô</b> → rủi ro bịa số &amp; sai cú pháp</td></tr>
+    </table>
+    <p class="muted" style="margin-top:12px">→ Kiến trúc “deterministic → findings → LLM tường thuật” đã <b>phổ biến ở mảng thương mại</b>. Khoảng trống thật nằm ở mã nguồn mở + <b>3 ràng buộc cụ thể</b> bên dưới.</p>
+  </section>
+
+  <!-- 5 · OUR SOLUTION / what gap -->
+  <section class="slide">
+    <div class="kicker">Giải pháp của chúng tôi giải quyết vấn đề gì</div>
+    <h2>Ghép đúng <span class="grad">3 mảnh chưa ai ghép cùng nhau</span> (Framing D).</h2>
+    <div class="grid g3" style="margin-top:8px">
+      <div class="card"><span class="pill in">Element 1</span><h3 style="margin-top:10px">Hợp đồng Finding chuẩn hóa (L3)</h3><p>Một schema JSON có version, hợp nhất kiểu lỗi (TFDV) + tách metric/constraint (Deequ) + <b>gán chuẩn DAMA-DMBOK / ISO 25012</b> trên từng finding.</p></div>
+      <div class="card"><span class="pill in">Element 2</span><h3 style="margin-top:10px">Verdict “sẵn sàng cho ML?” (L2→L3)</h3><p>Tổng hợp các tín hiệu (missing, outlier, leakage, imbalance…) thành một <b>phán quyết deterministic</b> READY / WARN / NOT_READY — mở rộng IBM DQ Toolkit.</p></div>
+      <div class="card"><span class="pill in">Element 3</span><h3 style="margin-top:10px">LLM bị cấm “tính toán số” (L4)</h3><p>AI chỉ được <b>trích dẫn &amp; diễn giải</b> con số có sẵn trong L3, không được tự sinh số. Đây là “con hào” không vendor nào công bố.</p></div>
+    </div>
+    <div class="hl em" style="margin-top:22px"><p><b>Khác biệt cô đọng:</b> không phải “kiến trúc mới” (cái đó thương mại đã làm) — mà là <b>bản mã nguồn mở đầu tiên</b> kết hợp <i>schema chuẩn hóa + verdict ML deterministic + LLM cấm bịa số + đảm bảo tái lập</i>.</p></div>
+  </section>
+
+  <!-- 6 · PHILOSOPHY + LAYERS -->
+  <section class="slide">
+    <div class="kicker">Triết lý kiến trúc</div>
+    <h2>Deterministic-First, LLM-Last.</h2>
+    <div class="grid g2" style="margin-top:6px">
+      <div class="card hl"><h3>Máy tính làm phần “sự thật”</h3><p>L1–L3 thuần Python/ML/thống kê: <b>mọi con số, mọi biểu đồ</b> đều sinh từ engine xác định, tái lập được (seed cố định, temperature=0).</p></div>
+      <div class="card hl am"><h3>AI làm phần “diễn đạt”</h3><p>L4 LLM <b>tuyệt đối không chạm dữ liệu thô</b> — chỉ đọc file JSON findings. Vai trò: “người đọc kết quả thống kê” + viết văn.</p></div>
+    </div>
+    <h3 style="margin-top:24px">4 tầng (+ 2 tầng phụ)</h3>
+    <div class="grid g4" style="gap:12px">
+      <div class="card tight center"><span class="pill cy">L1</span><p style="margin-top:8px"><b>Profiling</b><br><span class="muted">thống kê mô tả</span></p></div>
+      <div class="card tight center"><span class="pill cy">L2</span><p style="margin-top:8px"><b>Detection</b><br><span class="muted">anomaly + schema</span></p></div>
+      <div class="card tight center"><span class="pill cy">L3</span><p style="margin-top:8px"><b>Ontology</b><br><span class="muted">JSON contract ❤️</span></p></div>
+      <div class="card tight center"><span class="pill cy">L4</span><p style="margin-top:8px"><b>Narrative</b><br><span class="muted">LLM bị khóa</span></p></div>
+    </div>
+    <p class="muted" style="margin-top:10px">Phụ trợ: <b>L0</b> ingestion (CSV/Excel/DBML) · <b>L2.5</b> Severity Stack (chấm mức + Dataset Verdict) · <b>L3.5</b> dual visualization (biểu đồ tổng quan + biểu đồ chẩn đoán do LLM ra lệnh vẽ).</p>
+  </section>
+
+  <!-- 7 · WORKFLOW FLOW -->
+  <section class="slide">
+    <div class="kicker">Workflow hoạt động ra sao</div>
+    <h2>Luồng dữ liệu từ file thô đến báo cáo.</h2>
+    <div class="flow">
+      <div class="step"><div class="lab">L0 · INGESTION</div><div class="ti">Đọc &amp; chuẩn hóa</div><div class="io">CSV / Excel + file DBML → <b>DataFrame</b> (+ smart sampling 500k dòng)</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="lab">L1 · PROFILING</div><div class="ti">Thống kê mô tả</div><div class="io">ydata-profiling → mean, null%, cardinality, duplicates, alerts</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="lab">L2 · DETECTION</div><div class="ti">Tìm rác + soi schema</div><div class="io">PyOD ensemble (outlier) + pydbml/Pandas (FK mồ côi)</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="lab">L2.5 · SEVERITY</div><div class="ti">Chấm mức &amp; verdict</div><div class="io">MCAR/MAR/MNAR · Calibrator · Compound · Aggregator → READY/WARN/NOT_READY</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="lab">L3 · ONTOLOGY</div><div class="ti">Đóng gói findings</div><div class="io">3 file JSON Pydantic-strict + severity + DAMA + verdict</div></div>
+      <div class="arrow">→</div>
+      <div class="step"><div class="lab">L4 · NARRATIVE</div><div class="ti">AI viết báo cáo</div><div class="io">Multi-agent + <b>guardrail chống bịa số</b> → Markdown</div></div>
+    </div>
+    <div class="grid g2" style="margin-top:22px">
+      <div class="card tight"><h3>Song song hóa L3.5</h3><p><b>Overview charts</b> trích thẳng từ output ydata. <b>Diagnostic charts</b>: ở L4, agent ra lệnh JSON “vẽ scatter cột Tuổi”, Python vẽ &amp; bôi đỏ 100% điểm rác.</p></div>
+      <div class="card tight"><h3>An toàn khi AI hỏng</h3><p>OpenAI timeout/lỗi → retry 3× → <b>graceful degradation</b>: vẫn xuất báo cáo chỉ-biểu-đồ-và-thống-kê, ẩn phần văn AI. Không bao giờ crash.</p></div>
+    </div>
+  </section>
+
+  <!-- 8 · LAYER I/O TABLE -->
+  <section class="slide">
+    <div class="kicker">Input / Output của từng tầng</div>
+    <h2>Hợp đồng vào–ra rõ ràng giữa các tầng.</h2>
+    <table>
+      <tr><th>Tầng</th><th>Công nghệ</th><th>Input</th><th>Output</th></tr>
+      <tr><td><b class="ok">L0</b> Ingestion</td><td>pandas, pydbml</td><td>file CSV/Excel, file <code>.dbml</code></td><td><b>DataFrame(s)</b> + schema đã parse (mã hóa utf-8→utf-8-sig fallback)</td></tr>
+      <tr><td><b class="ok">L1</b> Profiling</td><td>ydata-profiling (<code>minimal=True</code>)</td><td>DataFrame</td><td><code>DatasetMeta</code> + <code>ColumnStats</code>: n, n_var, p_cells_missing, n_duplicates, type, n_missing, n_zeros/n_distinct</td></tr>
+      <tr><td><b class="ok">L2</b> Anomaly</td><td>PyOD: IForest+ECOD+LOF, <code>average()</code></td><td>DataFrame (chỉ cột số)</td><td>điểm bất thường chuẩn hóa [0,1] + ngưỡng percentile → danh sách dòng rác</td></tr>
+      <tr><td><b class="ok">L2</b> Schema</td><td>pydbml + Pandas</td><td>DataFrame + DBML</td><td><code>IntegrityError[]</code>: <code>ORPHAN_FOREIGN_KEY</code>, affected_table, top-10 mẫu</td></tr>
+      <tr><td><b class="wn">L2.5</b> Severity Stack</td><td>scipy (Little's), Logistic, table-lookup</td><td>output thô L1 + L2</td><td>severity hiệu chỉnh + <code>compound_severity</code> + <b>Dataset Verdict</b> (READY/WARN/NOT_READY)</td></tr>
+      <tr><td><b class="cy">L3</b> Ontology</td><td>Pydantic (strict)</td><td>output L1 + L2 + L2.5</td><td><b>3 file JSON</b> validated (xem slide sau)</td></tr>
+      <tr><td><b class="am">L3.5</b> Charts</td><td>matplotlib</td><td>findings + lệnh vẽ JSON</td><td>PNG overview + diagnostic (bôi đỏ điểm rác)</td></tr>
+      <tr><td><b class="ro">L4</b> Narrative</td><td>Chart Architect + Mini + Master agents + Guardrail Python (sau mỗi agent)</td><td><b>chỉ</b> JSON L3 (lát cắt theo agent)</td><td>Báo cáo Markdown + biểu đồ, mọi số đã đối chiếu Allowed-Set</td></tr>
+    </table>
+  </section>
+
+  <!-- 9 · L3 JSON CONTRACT -->
+  <section class="slide">
+    <div class="kicker">L3 — Trái tim của hệ thống</div>
+    <h2>Hợp đồng dữ liệu: <span class="grad">3 file JSON</span> Pydantic-strict.</h2>
+    <div class="grid g2">
+      <div>
+        <div class="json"><span class="c">// 1) data_quality_findings.json  → Data QA Agent</span>
+{
+  <span class="k">"dataset_meta"</span>: { <span class="k">"n"</span>:891, <span class="k">"p_cells_missing"</span>:0.08,
+                    <span class="k">"n_duplicates"</span>:0 },
+  <span class="k">"columns"</span>: { <span class="s">"Age"</span>: { <span class="k">"type"</span>:<span class="s">"numeric"</span>,
+                       <span class="k">"p_missing"</span>:0.19 } },
+  <span class="k">"anomalies"</span>: [{
+     <span class="k">"issue_type"</span>:<span class="s">"OUTLIER_ENSEMBLE"</span>,
+     <span class="k">"severity"</span>:<span class="s">"HIGH"</span>,
+     <span class="k">"detected_by"</span>:<span class="s">"IForest+ECOD+LOF/avg"</span>,
+     <span class="k">"dq_dimensions"</span>:[<span class="s">"Validity"</span>],          <span class="c">// C1</span>
+     <span class="k">"compound_severity"</span>:<span class="s">"CRITICAL"</span>,        <span class="c">// C2</span>
+     <span class="k">"top_10_samples"</span>:[...] }]
+}</div>
+      </div>
+      <div>
+        <div class="json"><span class="c">// 2) schema_evaluation_findings.json → Architect</span>
+{
+  <span class="k">"schema_meta"</span>:{ <span class="k">"total_tables"</span>:3,
+                   <span class="k">"total_relationships"</span>:2 },
+  <span class="k">"integrity_errors"</span>:[{
+     <span class="k">"error_type"</span>:<span class="s">"ORPHAN_FOREIGN_KEY"</span>,
+     <span class="k">"affected_table"</span>:<span class="s">"orders"</span>,
+     <span class="k">"severity"</span>:<span class="s">"CRITICAL"</span> }]
+}</div>
+        <div class="json" style="margin-top:12px"><span class="c">// 3) dataset_verdict.json  (mới, từ L2.5)</span>
+{
+  <span class="k">"dataset_verdict"</span>:{
+     <span class="k">"overall"</span>:<span class="s">"NOT_READY"</span>,   <span class="c">// READY|WARN|NOT_READY</span>
+     <span class="k">"score"</span>:0.42,
+     <span class="k">"top_blocking_findings"</span>:[...] }
+}</div>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:10px">Tách file để LLM <b>không bị “ngợp” context</b>. Trường <code>dq_dimensions</code> / <code>compound_severity</code> / verdict là phần làm giàu (C1+C2) so với bản gốc 2 file.</p>
+  </section>
+
+  <!-- 10 · L4 GUARDRAIL -->
+  <section class="slide">
+    <div class="kicker">L4 — Cơ chế chống bịa số (Guardrail)</div>
+    <h2>“Cảnh vệ” Python đứng giữa LLM và sự thật.</h2>
+    <div class="grid g2">
+      <div class="card hl ro">
+        <h3>Vấn đề</h3>
+        <p>Retry-on-network-error chỉ chống <b>lỗi mạng/format</b>, KHÔNG chống <b>bịa số / bịa tên cột</b>. Đó mới là khác biệt deterministic-first thật.</p>
+        <h3 style="margin-top:14px">Cơ chế: Allowed-Set + Tolerance + Column-Check</h3>
+        <ol style="padding-left:1.2em">
+          <li>Xây <b>Allowed-Set</b>: mọi số trong JSON gốc + whitelist <code>{0,1,2,3,10,100,1000}</code> + cho qua số năm.</li>
+          <li>Regex quét <b>MỌI</b> số trong văn bản LLM → đối chiếu Allowed-Set với tolerance (integer: chính xác · decimal: ±0.0001 · relative: ±0.1%).</li>
+          <li><b>Column-name check:</b> LLM nhắc tên cột không tồn tại → hallucination.</li>
+          <li>Vi phạm → retry ≤3 → thay bằng <code>&lt;SỐ LIỆU CHƯA XÁC MINH&gt;</code>. Chạy sau <b>mỗi</b> agent (Mini + Master).</li>
+        </ol>
+      </div>
+      <div class="card hl em">
+        <h3>Cam kết (đo bằng eval 50-finding)</h3>
+        <table>
+          <tr><th>Chỉ số</th><th>Mục tiêu</th><th>Kill nếu</th></tr>
+          <tr><td>Hallucination (mọi số trong báo cáo)</td><td class="ok">0%</td><td class="no">&gt; 2%</td></tr>
+          <tr><td>Over-masking (mask nhầm số đúng)</td><td class="ok">&lt; 5%</td><td class="no">&gt; 15%</td></tr>
+          <tr><td>Column hallucination</td><td class="ok">0%</td><td>—</td></tr>
+        </table>
+        <p style="margin-top:12px"><b>Verify thuần Python, &lt;5ms/report, không gọi LLM</b> → tái lập 100%. Tách bạch với retry mạng. So sánh A/B (có vs không guardrail) = số liệu cho paper/blog.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 · SEVERITY & VERDICT -->
+  <section class="slide">
+    <div class="kicker">Chấm điểm nghiêm trọng &amp; phán quyết</div>
+    <h2>Từ “1.247 lỗi” (nhiễu) → “3 lỗi CRITICAL chặn training” (tín hiệu).</h2>
+    <div class="grid g3">
+      <div class="card"><h3>Per-finding (DAMA-aware)</h3><p>Bảng ngưỡng key theo <b>(chiều DAMA × magnitude bucket)</b>, có tài liệu — thay cho rule rời rạc <code>if missing&gt;20% then HIGH</code>.</p></div>
+      <div class="card"><h3>Compound escalation</h3><p>≥2 lỗi trùng trên 1 cột (missing + drift + outlier) → <b>nâng 1 bậc</b> (max-tier+1, cap CRITICAL). Điền trường <code>compound_severity</code>.</p></div>
+      <div class="card"><h3>Dataset Verdict</h3><p>Rollup có trọng số → <b>READY / WARN / NOT_READY</b> + điểm + danh sách lỗi chặn. File JSON thứ 3.</p></div>
+    </div>
+    <div class="spec" style="margin-top:20px">
+      <p><span class="pill in">Quyết định kiến trúc</span> &nbsp;Cả <b>4 module L2.5 đều có trong v1</b> (runtime nhẹ: ~50+20+30+15 dòng). Chỉ <b>việc fit bảng <code>calibrator_table.json</code></b> bằng benchmark 72 dataset OpenML-CC18 (đo tương quan với mức tụt accuracy) là <b>hoãn sang nhánh paper</b>. v0.1 dùng bảng đặt tay <i>cùng cấu trúc</i> → sau này chỉ thay nguồn số, không đổi code.</p>
+    </div>
+  </section>
+
+  <!-- 12 · EXPECTED OUTPUT -->
+  <section class="slide">
+    <div class="kicker">Expect đầu ra của toàn bộ pipeline</div>
+    <h2>Một “lần click” → báo cáo chẩn đoán hoàn chỉnh.</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3>📄 Artifact chính</h3>
+        <ul>
+          <li><b>Báo cáo Markdown</b> có Executive Summary + nhận xét từng cột/bảng, chèn biểu đồ.</li>
+          <li><b>3 file JSON</b> findings (machine-readable, audit được).</li>
+          <li><b>File CSV</b> dump 100% dòng rác để Data Engineer xử lý.</li>
+          <li><b>Biểu đồ</b> overview + diagnostic (điểm rác bôi đỏ).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>✅ Tính chất đảm bảo</h3>
+        <ul>
+          <li><b>0% bịa số</b> trên các con số có trích dẫn (đo bằng eval).</li>
+          <li><b>Tái lập:</b> cùng input → cùng báo cáo (temp=0, hash L3 lưu kèm).</li>
+          <li><b>Verdict ML-readiness:</b> trả lời thẳng “dữ liệu sẵn sàng train chưa?”.</li>
+          <li><b>Đa bảng:</b> bắt lỗi khóa ngoại mồ côi giữa các bảng qua DBML.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="hl em" style="margin-top:20px"><p><b>Ví dụ kết luận máy đọc được:</b> <code>verdict = NOT_READY (0.42)</code> vì 1 lỗi <code>ORPHAN_FOREIGN_KEY</code> mức CRITICAL ở bảng <code>orders</code> + cột <code>Age</code> có 19% missing nâng bậc cùng outlier → khối training.</p></div>
+  </section>
+
+  <!-- 13 · DIFFERENTIATOR -->
+  <section class="slide">
+    <div class="kicker">Điểm khác biệt — vì sao khó copy</div>
+    <h2>So với cả OSS lẫn thương mại.</h2>
+    <table>
+      <tr><th>Khả năng</th><th>OSS hiện có</th><th>Thương mại</th><th>VSF-EDA</th></tr>
+      <tr><td>Auto-discovery lỗi (không cần khai rule)</td><td class="wn">một phần</td><td class="ok">có</td><td class="ok">có</td></tr>
+      <tr><td>Gán chuẩn DAMA/ISO trên từng finding</td><td class="wn">nhãn (TestGen)</td><td class="wn">nhãn</td><td class="ok">nhãn + derivation có tài liệu</td></tr>
+      <tr><td>Verdict ML-readiness deterministic</td><td class="no">không</td><td class="no">không (lo monitoring)</td><td class="ok">có (mở rộng IBM Toolkit)</td></tr>
+      <tr><td>LLM <b>cấm</b> tự sinh số</td><td class="no">không</td><td class="no">không công bố</td><td class="ok">ràng buộc cứng + eval</td></tr>
+      <tr><td>Báo cáo tái lập (hash + temp=0)</td><td class="no">không</td><td class="no">không vendor nào công bố</td><td class="ok">có</td></tr>
+      <tr><td>Đa bảng DBML → FK mồ côi</td><td class="no">gần như không</td><td class="wn">hạn chế</td><td class="ok">tự xây in-house</td></tr>
+    </table>
+    <p class="muted" style="margin-top:12px">“Con hào” mạnh nhất: <b>LLM cấm tính toán số</b> + <b>tính tái lập</b> — hai thứ <b>không vendor nào</b> (Monte Carlo, Anomalo, Acceldata) công bố.</p>
+  </section>
+
+  <!-- 14 · ROADMAP -->
+  <section class="slide">
+    <div class="kicker">Lộ trình</div>
+    <h2>5 phase build · 2 nhánh giá trị (tool ⨯ paper).</h2>
+    <div class="grid" style="grid-template-columns:repeat(5,1fr);gap:12px">
+      <div class="card tight"><span class="pill cy">Phase 1</span><h3 style="margin-top:8px">Core engines</h3><p class="muted">ingestion + profiling + anomaly + schema (L1, L2)</p></div>
+      <div class="card tight"><span class="pill cy">Phase 2</span><h3 style="margin-top:8px">Ontology + Severity</h3><p class="muted">Pydantic C1 + 4 module L2.5 + 3 file JSON (L2.5, L3)</p></div>
+      <div class="card tight"><span class="pill cy">Phase 3</span><h3 style="margin-top:8px">Visualization</h3><p class="muted">overview charts + Chart Architect (L3.5)</p></div>
+      <div class="card tight"><span class="pill cy">Phase 4</span><h3 style="margin-top:8px">AI + Guardrail</h3><p class="muted">validator + agents + guardrail sau mỗi agent (L4)</p></div>
+      <div class="card tight"><span class="pill cy">Phase 5</span><h3 style="margin-top:8px">Tích hợp + Test</h3><p class="muted">main.py + Titanic/E-commerce + eval 50-finding</p></div>
+    </div>
+    <p class="muted" style="margin-top:12px">📋 <b>Kế hoạch TDD đã viết xong cho cả L1→L4</b> (test-first, từng task): Part 1-2 (core L1/L2/L3, Task 1-8) · <b>Part 3</b> (Severity Stack L2.5 + guardrail, Task 9-17) · <b>Part 4</b> (multi-agent L4 + <code>main.py</code>, Task 18-25). Toàn bộ unit-test được không cần API key (mock LLM client).</p>
+    <div class="grid g2" style="margin-top:20px">
+      <div class="card hl em"><h3>Nhánh sản phẩm (v0.1)</h3><p>C1 (schema giàu DAMA) + <b>toàn bộ L2.5</b> (Verdict + Compound + MCAR/MAR/MNAR, bảng đặt tay) + C3 (guardrail Allowed-Set). Mục tiêu: tool dùng được, nhanh, đúng số.</p></div>
+      <div class="card hl am"><h3>Nhánh nghiên cứu (paper)</h3><p>Fit <code>calibrator_table.json</code> bằng OpenML-CC18 → bảng severity có cơ sở thực nghiệm (“Calibrated severity on OpenML-CC18”). Kill nếu Spearman ρ &lt; 0.5.</p></div>
+    </div>
+  </section>
+
+  <!-- 15 · WHAT YOU MAY NOT KNOW (added) -->
+  <section class="slide">
+    <div class="kicker">Bổ sung — những phần dễ bị bỏ qua</div>
+    <h2>Rủi ro, đánh giá &amp; phần “honest”.</h2>
+    <div class="grid g2">
+      <div class="card">
+        <h3>⚠️ Giới hạn cần nói thẳng</h3>
+        <ul>
+          <li><b>Bảng severity v0.1 đặt tay</b> (heuristic) — chưa được validate thực nghiệm cho tới khi fit OpenML-CC18.</li>
+          <li><b>Multimodal:</b> claim từ “nhìn biểu đồ” (vision) guardrail số <b>không</b> chặn được (chấp nhận rủi ro, ghi log).</li>
+          <li><b>v1 anomaly chỉ cột số;</b> rác đa biến categorical/cross-column hoãn v2.</li>
+          <li><b>Over-masking:</b> Allowed-Set có thể mask nhầm số đúng → phải đo (&lt;5%).</li>
+          <li><b>Calibration per-customer:</b> CRITICAL của finance ≠ marketing → cần framework, không có default tuyệt đối.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>🧪 Kế hoạch đánh giá (kill criteria)</h3>
+        <ul>
+          <li><b>Guardrail:</b> hallucination 0% / over-masking &lt;5% trên 50 finding.</li>
+          <li><b>Severity calibration:</b> Spearman ρ(tier, Δaccuracy) ≥ 0.5 trên held-out.</li>
+          <li><b>Verdict:</b> dataset sạch→READY; 1 orphan-FK CRITICAL→NOT_READY.</li>
+          <li><b>A/B baseline:</b> cùng input chạy có/không guardrail → bảng số.</li>
+        </ul>
+        <h3 style="margin-top:14px">📈 Cơ hội công bố</h3>
+        <p class="muted">Schema L3 published (versioned JSON Schema + adapter) · benchmark calibration OpenML · so sánh faithfulness LLM-narrative.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 · CLOSING -->
+  <section class="slide center" style="align-items:center;text-align:center">
+    <div class="kicker">Tóm lại trong một câu</div>
+    <h1 style="max-width:18ch">Báo cáo EDA do AI viết — nhưng <span class="grad">mọi con số đều có thể kiểm chứng.</span></h1>
+    <p class="lead" style="margin:22px auto 0">Deterministic-First, LLM-Last · Schema chuẩn hóa + Verdict ML-readiness + Guardrail chống bịa số · Mã nguồn mở, tái lập 100%.</p>
+    <div style="margin-top:26px">
+      <span class="pill em" style="font-size:14px;padding:.5em 1em">L1→L2→L3→L4</span>
+      &nbsp;<span class="pill cy" style="font-size:14px;padding:.5em 1em">3 JSON contract</span>
+      &nbsp;<span class="pill am" style="font-size:14px;padding:.5em 1em">0% bịa số (cited)</span>
+    </div>
+    <p class="muted" style="margin-top:28px">Cảm ơn — Q&amp;A.</p>
+  </section>
+
+</div>
+
+<div class="nav">
+  <button id="prev" aria-label="Trước">‹</button>
+  <button id="next" aria-label="Sau">›</button>
+</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  let i=0;
+  const prog=document.getElementById('prog');
+  function show(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    prog.style.width=((i+1)/slides.length*100)+'%';
+    if(location.hash!=='#'+(i+1)) history.replaceState(null,'','#'+(i+1));
+  }
+  function next(){show(i+1)} function prev(){show(i-1)}
+  document.getElementById('next').onclick=next;
+  document.getElementById('prev').onclick=prev;
+  addEventListener('keydown',e=>{
+    if(['ArrowRight','PageDown',' '].includes(e.key)){e.preventDefault();next()}
+    else if(['ArrowLeft','PageUp'].includes(e.key)){e.preventDefault();prev()}
+    else if(e.key==='Home')show(0); else if(e.key==='End')show(slides.length-1);
+  });
+  let x0=null;
+  addEventListener('touchstart',e=>x0=e.touches[0].clientX,{passive:true});
+  addEventListener('touchend',e=>{if(x0==null)return;const dx=e.changedTouches[0].clientX-x0;if(Math.abs(dx)>50){dx<0?next():prev()}x0=null},{passive:true});
+  const start=parseInt((location.hash||'').slice(1));show(isNaN(start)?0:start-1);
+</script>
+</body>
+</html>
