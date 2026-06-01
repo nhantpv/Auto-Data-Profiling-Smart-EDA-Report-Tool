@@ -8,8 +8,7 @@ from pyod.models.lof import LOF
 logger = logging.getLogger(__name__)
 
 _CONTAMINATION = 0.05
-_Z_GATE = 1.5   # per-detector z-score threshold
-_N_AGREE = 2    # minimum detectors that must exceed _Z_GATE to flag a row (majority vote)
+_DEFAULT_Z_GATE = 4.0  # production ~4σ; calibrate on real data
 
 
 def _zscore(scores: np.ndarray) -> np.ndarray:
@@ -23,6 +22,7 @@ def _zscore(scores: np.ndarray) -> np.ndarray:
 def run_anomaly_detection(
     df: pd.DataFrame,
     contamination: float = _CONTAMINATION,
+    z_gate: float = _DEFAULT_Z_GATE,
 ) -> dict:
     numeric_df = df.select_dtypes(include="number")
 
@@ -57,6 +57,7 @@ def run_anomaly_detection(
 
     n_samples = len(X)
     lof_neighbors = min(20, n_samples - 1)
+
     models = [
         ("IForest", IForest(contamination=contamination, random_state=42)),
         ("ECOD", ECOD(contamination=contamination)),
@@ -78,11 +79,9 @@ def run_anomaly_detection(
             "skipped": True,
         }
 
-    z_scores = [_zscore(s) for s in raw_scores]
-    ensemble_z = np.mean(z_scores, axis=0)
-    votes = np.sum([z >= _Z_GATE for z in z_scores], axis=0)
-    outlier_mask = votes >= _N_AGREE
-
+    # Maximization combiner: robust to LOF sign-inversion on small n
+    ensemble_z = np.max([_zscore(s) for s in raw_scores], axis=0)
+    outlier_mask = ensemble_z >= z_gate
     display = 1.0 / (1.0 + np.exp(-ensemble_z))
 
     outlier_positions = np.where(outlier_mask)[0]
