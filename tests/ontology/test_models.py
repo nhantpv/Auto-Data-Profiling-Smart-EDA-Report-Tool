@@ -1,0 +1,130 @@
+import pytest
+from ontology.models import DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings
+
+
+class TestDatasetMeta:
+    def test_valid_meta(self):
+        meta = DatasetMeta(
+            file_name="test.csv",
+            n=1000,
+            n_var=5,
+            memory_size=1024,
+            p_cells_missing=0.05,
+            n_duplicates=10,
+            p_duplicates=0.01,
+            overview_charts={"heatmap": "path/to/img.png"},
+        )
+        assert meta.n == 1000
+        assert meta.n_duplicates == 10
+
+    def test_meta_defaults(self):
+        meta = DatasetMeta(
+            file_name="x.csv", n=1, n_var=1, memory_size=0, p_cells_missing=0.0
+        )
+        assert meta.overview_charts == {}
+        assert meta.n_duplicates == 0
+
+
+class TestColumnStats:
+    def test_numeric_column(self):
+        col = ColumnStats(
+            type="Numeric",
+            n_missing=10,
+            p_missing=0.1,
+            additional_metrics={"mean": 25.5, "std": 3.2},
+        )
+        assert col.additional_metrics["mean"] == 25.5
+
+    def test_categorical_column(self):
+        col = ColumnStats(
+            type="Categorical",
+            n_missing=0,
+            p_missing=0.0,
+            n_distinct=5,
+            additional_metrics={},
+        )
+        assert col.n_distinct == 5
+
+
+class TestAnomalyRecord:
+    def test_valid_anomaly(self):
+        rec = AnomalyRecord(
+            issue_type="OUTLIER_ENSEMBLE",
+            description="Found 10 outliers",
+            severity="HIGH",
+            dq_dimensions=["Accuracy"],
+            ml_impact=["training_bias"],
+            compound_severity="HIGH",
+            confidence=0.92,
+            affected_count=10,
+            affected_percent=0.01,
+            top_10_samples=[{"id": 1, "score": 0.99}],
+            diagnostic_chart="path/to/chart.png",
+            full_anomalies_export_path="path/to/export.csv",
+        )
+        assert rec.severity == "HIGH"
+        assert rec.dq_dimensions == ["Accuracy"]
+        assert rec.compound_severity == "HIGH"
+        assert len(rec.top_10_samples) == 1
+
+    def test_anomaly_optional_fields(self):
+        rec = AnomalyRecord(
+            issue_type="DUPLICATE",
+            description="Found duplicates",
+            severity="WARN",  # NOTE: uses WARN not MEDIUM (MEDIUM not in Severity enum)
+            affected_count=5,
+            affected_percent=0.005,
+            top_10_samples=[],
+        )
+        assert rec.diagnostic_chart is None
+
+
+class TestDataQualityFindings:
+    def test_full_roundtrip(self):
+        findings = DataQualityFindings(
+            dataset_meta=DatasetMeta(
+                file_name="test.csv", n=100, n_var=3,
+                memory_size=500, p_cells_missing=0.02,
+            ),
+            columns={
+                "age": ColumnStats(
+                    type="Numeric", n_missing=2, p_missing=0.02,
+                    additional_metrics={"mean": 30},
+                ),
+            },
+            anomalies=[],
+        )
+        json_str = findings.model_dump_json()
+        restored = DataQualityFindings.model_validate_json(json_str)
+        assert restored.dataset_meta.file_name == "test.csv"
+        assert restored.columns["age"].additional_metrics["mean"] == 30
+
+
+from ontology.models import (
+    Severity, SEVERITY_ORDER, Verdict, VerdictSummary, DatasetVerdict,
+)
+
+
+class TestSeverityOrder:
+    def test_order_is_ascending(self):
+        assert SEVERITY_ORDER == (Severity.INFO, Severity.WARN, Severity.HIGH, Severity.CRITICAL)
+
+
+class TestDatasetVerdict:
+    def test_roundtrip(self):
+        dv = DatasetVerdict(
+            dataset_meta=DatasetMeta(file_name="x.csv", n=10, n_var=2,
+                                     memory_size=1, p_cells_missing=0.0),
+            verdict=Verdict.WARN,
+            verdict_rationale="1 CRITICAL orphan FK",
+            summary=VerdictSummary(total_issues=3, critical=1, high=1, warn=1),
+        )
+        restored = DatasetVerdict.model_validate_json(dv.model_dump_json())
+        assert restored.verdict == Verdict.WARN
+        assert restored.summary.critical == 1
+
+
+class TestColumnZeros:
+    def test_n_zeros_optional(self):
+        assert ColumnStats(type="Categorical", n_missing=0, p_missing=0.0).n_zeros is None
+        assert ColumnStats(type="Numeric", n_missing=0, p_missing=0.0, n_zeros=5).n_zeros == 5
