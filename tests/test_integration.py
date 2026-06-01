@@ -7,7 +7,10 @@ from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from ontology.findings_builder import build_data_quality_findings
-from ontology.models import DataQualityFindings
+from ontology.models import DataQualityFindings, DatasetVerdict, Verdict
+from severity.calibrator import calibrate_columns, load_calibrator_table
+from severity.compound import apply_compound
+from severity.aggregator import aggregate
 
 
 class TestFullPipeline:
@@ -21,7 +24,7 @@ class TestFullPipeline:
         assert "table" in profile
 
         # Step 3: Layer 2 — Anomaly Detection
-        anomalies = run_anomaly_detection(df)
+        anomalies = run_anomaly_detection(df, profile_result=profile)
         assert anomalies["n_outliers"] >= 0
 
         # Step 4: Layer 3 — Build Findings
@@ -53,3 +56,36 @@ class TestFullPipeline:
         restored = DataQualityFindings.model_validate(raw)
         assert restored.dataset_meta.n == 32
         assert len(restored.anomalies) >= 1  # at least outliers or duplicates
+
+    def test_severity_pipeline_produces_verdict_json(self, realistic_outliers_path, tmp_path):
+        df = load_csv(realistic_outliers_path)
+        profile = run_profiling(df)
+        anomalies = run_anomaly_detection(df, profile_result=profile)
+        findings = build_data_quality_findings(
+            file_name="outliers_realistic.csv",
+            df=df,
+            profile_result=profile,
+            anomaly_result=anomalies,
+        )
+
+        # Layer 2.5 — severity stack
+        table = load_calibrator_table()
+        col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
+        all_dq = apply_compound(findings.anomalies + col_findings)
+        verdict = aggregate(findings.dataset_meta, all_dq)
+
+        # Emit both output files
+        dq_path = tmp_path / "data_quality_findings.json"
+        verdict_path = tmp_path / "dataset_verdict.json"
+        dq_path.write_text(findings.model_dump_json(indent=2), encoding="utf-8")
+        verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
+
+        # Both files exist and are valid JSON
+        assert dq_path.exists()
+        assert verdict_path.exists()
+
+        restored = DatasetVerdict.model_validate_json(verdict_path.read_text())
+        assert restored.verdict in (Verdict.READY, Verdict.WARN, Verdict.NOT_READY)
+        assert restored.summary.total_issues >= 0
+        # Sanity: realistic fixture has no catastrophic missing → expect READY or WARN
+        assert restored.verdict != Verdict.NOT_READY
