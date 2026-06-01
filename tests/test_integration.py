@@ -91,6 +91,7 @@ class TestFullPipeline:
         assert restored.verdict in (Verdict.READY, Verdict.WARN, Verdict.NOT_READY)
         assert restored.summary.total_issues >= 0
         # Sanity: realistic fixture has no catastrophic missing → expect READY or WARN
+        # (3b note: MAR escalation on small-missing cols yields WARN tier → verdict stays READY)
         assert restored.verdict != Verdict.NOT_READY
 
 

@@ -4,13 +4,14 @@ from severity.calibrator import calibrate_columns, load_calibrator_table
 
 
 def _col(type_="Numeric", p_missing=0.0, n_distinct=10, n_missing=0,
-         additional_metrics=None):
+         additional_metrics=None, missingness_mechanism=None):
     return ColumnStats(
         type=type_,
         n_missing=n_missing,
         p_missing=p_missing,
         n_distinct=n_distinct,
         additional_metrics=additional_metrics or {},
+        missingness_mechanism=missingness_mechanism,
     )
 
 
@@ -89,6 +90,48 @@ class TestCalibrateImbalance:
         findings = calibrate_columns({"val": col}, load_calibrator_table(), n=100)
         imbalance = [f for f in findings if f.issue_type == "IMBALANCE"]
         assert imbalance == []
+
+
+class TestCalibrateMissingnessEscalation:
+    """3b-3: MAR/MNAR? escalate completeness severity by 1 tier; MCAR/None do not."""
+
+    def test_mar_escalates_warn_to_high(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MAR")
+        findings = calibrate_columns({"bmi": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.HIGH   # WARN+1 = HIGH
+
+    def test_mnar_escalates_warn_to_high(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MNAR?")
+        findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.HIGH
+
+    def test_mcar_no_escalation(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MCAR")
+        findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.WARN   # unchanged
+
+    def test_none_mechanism_no_escalation(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism=None)
+        findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.WARN   # 3a behaviour unchanged
+
+    def test_mar_caps_at_critical(self):
+        # p_missing=0.6 → already CRITICAL; escalation stays CRITICAL (no overflow)
+        col = _col(p_missing=0.60, n_missing=60, missingness_mechanism="MAR")
+        findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.CRITICAL
+
+    def test_mar_escalates_info_to_warn(self):
+        # p_missing=0.03 → INFO; MAR → WARN
+        col = _col(p_missing=0.03, n_missing=3, missingness_mechanism="MAR")
+        findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
+        f = next(x for x in findings if x.issue_type == "MISSINGNESS")
+        assert f.severity == Severity.WARN
 
 
 class TestCalibrateHighCardinality:

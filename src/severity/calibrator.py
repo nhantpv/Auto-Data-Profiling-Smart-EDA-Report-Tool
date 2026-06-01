@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from ontology.models import AnomalyRecord, ColumnStats, Severity
+from ontology.models import AnomalyRecord, ColumnStats, Severity, SEVERITY_ORDER
 
 _TABLE_PATH = Path(__file__).parent.parent.parent / "config" / "calibrator_table.json"
 
@@ -32,6 +32,10 @@ def calibrate_columns(
         # Completeness
         if stats.p_missing > 0:
             sev = _missingness_severity(stats.p_missing, completeness_cfg["thresholds"])
+            # Escalate by 1 tier for non-random missing (MAR/MNAR? are more dangerous than MCAR)
+            if stats.missingness_mechanism in ("MAR", "MNAR?"):
+                idx = SEVERITY_ORDER.index(sev)
+                sev = SEVERITY_ORDER[min(idx + 1, len(SEVERITY_ORDER) - 1)]
             findings.append(AnomalyRecord(
                 issue_type="MISSINGNESS",
                 description=f"Column '{col_name}' has {stats.p_missing:.1%} missing values",
