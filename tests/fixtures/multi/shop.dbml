@@ -1,0 +1,12 @@
+Table users {
+  id integer [pk]
+  email varchar [unique]
+}
+
+Table orders {
+  id integer [pk]
+  user_id integer
+  total decimal
+}
+
+Ref: orders.user_id > users.id

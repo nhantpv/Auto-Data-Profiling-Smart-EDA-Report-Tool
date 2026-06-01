@@ -1,7 +1,8 @@
 import pytest
 import pandas as pd
 from pathlib import Path
-from engines.schema_engine import parse_dbml, match_table, validate_table
+from pydbml import PyDBML
+from engines.schema_engine import parse_dbml, match_table, validate_table, normalize_refs, check_foreign_keys
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -233,3 +234,163 @@ class TestValidateTableNotNullUnique:
         assert len(uv) == 1
         assert uv[0].affected_column == "score"
         assert uv[0].severity.value == "HIGH"
+
+
+# ──────────────────────────────────────────────
+# 1b-1: normalize_refs
+# ──────────────────────────────────────────────
+
+def _db(src):
+    return PyDBML(src)
+
+
+_FK_DBML = """
+Table users {
+  id integer [pk]
+  email varchar
+}
+Table orders {
+  id integer [pk]
+  user_id integer
+  total decimal
+}
+Ref: orders.user_id > users.id
+"""
+
+_FK_REVERSE_DBML = """
+Table users {
+  id integer [pk]
+}
+Table orders {
+  id integer [pk]
+  user_id integer
+}
+Ref: users.id < orders.user_id
+"""
+
+_COMPOSITE_DBML = """
+Table a {
+  id integer [pk]
+  code varchar
+}
+Table b {
+  id integer [pk]
+  a_id integer
+  a_code varchar
+}
+Ref: b.(a_id, a_code) > a.(id, code)
+"""
+
+_DASH_DBML = """
+Table a {
+  id integer [pk]
+}
+Table b {
+  id integer [pk]
+  a_id integer
+}
+Ref: a.id - b.a_id
+"""
+
+
+class TestNormalizeRefs:
+    def test_forward_ref_parsed_correctly(self):
+        from engines.schema_engine import normalize_refs
+        refs = normalize_refs(_db(_FK_DBML))
+        assert len(refs) == 1
+        r = refs[0]
+        assert r["child_table"] == "orders"
+        assert r["fk_col"] == "user_id"
+        assert r["parent_table"] == "users"
+        assert r["pk_col"] == "id"
+
+    def test_reverse_ref_direction_flipped(self):
+        from engines.schema_engine import normalize_refs
+        refs = normalize_refs(_db(_FK_REVERSE_DBML))
+        assert len(refs) == 1
+        r = refs[0]
+        assert r["child_table"] == "orders"
+        assert r["fk_col"] == "user_id"
+        assert r["parent_table"] == "users"
+        assert r["pk_col"] == "id"
+
+    def test_composite_ref_skipped(self):
+        from engines.schema_engine import normalize_refs
+        refs = normalize_refs(_db(_COMPOSITE_DBML))
+        assert refs == []
+
+    def test_dash_ref_skipped(self):
+        from engines.schema_engine import normalize_refs
+        refs = normalize_refs(_db(_DASH_DBML))
+        assert refs == []
+
+
+# ──────────────────────────────────────────────
+# 1b-2: check_foreign_keys
+# ──────────────────────────────────────────────
+
+class TestCheckForeignKeys:
+    def _refs_for_shop(self):
+        from engines.schema_engine import normalize_refs
+        src = """
+Table users {
+  id integer [pk]
+  email varchar
+}
+Table orders {
+  id integer [pk]
+  user_id integer
+  total decimal
+}
+Ref: orders.user_id > users.id
+"""
+        return normalize_refs(_db(src))
+
+    def test_orphan_detected(self):
+        refs = self._refs_for_shop()
+        users = pd.DataFrame({"id": [1, 2, 3], "email": ["a@b.com", "b@b.com", "c@b.com"]})
+        orders = pd.DataFrame({"id": [101, 102, 103], "user_id": [1, 2, 9999], "total": [10.0, 20.0, 30.0]})
+        errors = check_foreign_keys({"users": users, "orders": orders}, refs)
+        orphans = [e for e in errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        assert len(orphans) == 1
+        assert orphans[0].affected_count == 1
+        assert orphans[0].affected_column == "user_id"
+        assert orphans[0].severity.value == "CRITICAL"
+        assert any(s.get("user_id") == 9999 for s in orphans[0].top_10_samples)
+
+    def test_fk_null_not_counted_as_orphan(self):
+        refs = self._refs_for_shop()
+        users = pd.DataFrame({"id": [1, 2, 3], "email": ["a@b.com", "b@b.com", "c@b.com"]})
+        orders = pd.DataFrame({"id": [101, 102, 103, 104],
+                               "user_id": [1, 2, None, 9999],
+                               "total": [10.0, 20.0, 30.0, 40.0]})
+        errors = check_foreign_keys({"users": users, "orders": orders}, refs)
+        orphans = [e for e in errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        assert len(orphans) == 1
+        assert orphans[0].affected_count == 1  # only 9999, not the null row
+
+    def test_all_valid_fk_no_errors(self):
+        refs = self._refs_for_shop()
+        users = pd.DataFrame({"id": [1, 2, 3], "email": ["a@b.com", "b@b.com", "c@b.com"]})
+        orders = pd.DataFrame({"id": [101, 102], "user_id": [1, 2], "total": [10.0, 20.0]})
+        errors = check_foreign_keys({"users": users, "orders": orders}, refs)
+        assert errors == []
+
+    def test_parent_table_missing_emits_unchecked(self):
+        refs = self._refs_for_shop()
+        orders = pd.DataFrame({"id": [101], "user_id": [1], "total": [10.0]})
+        # users not loaded
+        errors = check_foreign_keys({"orders": orders}, refs)
+        unchecked = [e for e in errors if e.error_type == "FK_UNCHECKED"]
+        assert len(unchecked) == 1
+        assert unchecked[0].severity.value == "WARN"
+
+    def test_dtype_family_mismatch_emits_unchecked(self):
+        refs = self._refs_for_shop()
+        # parent id is int, child user_id is string → family mismatch
+        users = pd.DataFrame({"id": [1, 2, 3], "email": ["a@b.com", "b@b.com", "c@b.com"]})
+        orders = pd.DataFrame({"id": [101, 102], "user_id": ["1", "2"], "total": [10.0, 20.0]})
+        errors = check_foreign_keys({"users": users, "orders": orders}, refs)
+        unchecked = [e for e in errors if e.error_type == "FK_UNCHECKED"]
+        assert len(unchecked) == 1
+        assert "family" in unchecked[0].description.lower() or "type" in unchecked[0].description.lower()

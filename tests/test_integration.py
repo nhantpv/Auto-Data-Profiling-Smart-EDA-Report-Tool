@@ -6,7 +6,7 @@ from ingestion.csv_reader import load_csv
 from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
-from engines.schema_engine import build_schema_findings
+from engines.schema_engine import build_schema_findings, validate_schema_multi
 from ontology.findings_builder import build_data_quality_findings
 from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings, Verdict
 from severity.calibrator import calibrate_columns, load_calibrator_table
@@ -167,3 +167,70 @@ class TestSchemaIntegration:
         assert Path(result["dq_path"]).exists()
         assert Path(result["verdict_path"]).exists()
         assert "schema_path" not in result
+
+
+class TestMultiTableIntegration:
+    MULTI = FIXTURES / "multi"
+
+    def test_orphan_fk_detected_not_ready(self):
+        dbml = str(self.MULTI / "shop.dbml")
+        csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
+        findings = validate_schema_multi(csvs, dbml)
+
+        error_types = {e.error_type for e in findings.integrity_errors}
+        assert "ORPHAN_FOREIGN_KEY" in error_types
+
+        orphan = next(e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY")
+        assert orphan.affected_count == 1
+        assert orphan.affected_column == "user_id"
+        assert any(s.get("user_id") == 9999 for s in orphan.top_10_samples)
+
+        # Verdict must be NOT_READY
+        from severity.aggregator import aggregate
+        from ontology.models import DatasetMeta
+        meta = DatasetMeta(file_name="shop", n=7, n_var=5, memory_size=0, p_cells_missing=0.0)
+        verdict = aggregate(meta, [], integrity_errors=findings.integrity_errors)
+        assert verdict.verdict == Verdict.NOT_READY
+
+    def test_null_fk_not_counted_as_orphan(self):
+        dbml = str(self.MULTI / "shop.dbml")
+        csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
+        findings = validate_schema_multi(csvs, dbml)
+        orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        # orders row 104 (user_id=null) must NOT be counted
+        assert orphans[0].affected_count == 1
+
+    def test_clean_orders_no_orphan(self):
+        dbml = str(self.MULTI / "shop.dbml")
+        csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders_clean.csv")]
+        findings = validate_schema_multi(csvs, dbml)
+        orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        assert orphans == []
+
+    def test_schema_meta_covers_all_tables(self):
+        dbml = str(self.MULTI / "shop.dbml")
+        csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
+        findings = validate_schema_multi(csvs, dbml)
+        assert findings.schema_meta.total_tables == 2
+        assert findings.schema_meta.total_relationships == 1
+        table_names = {t.name for t in findings.tables}
+        assert "users" in table_names
+        assert "orders" in table_names
+
+    def test_pipeline_multi_csv_produces_three_files(self, tmp_path):
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+        import importlib
+        import run_pipeline
+        importlib.reload(run_pipeline)
+
+        csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
+        dbml = str(self.MULTI / "shop.dbml")
+        result = run_pipeline.run_multi(csvs, str(tmp_path), dbml)
+
+        assert Path(result["schema_path"]).exists()
+        assert Path(result["verdict_path"]).exists()
+
+        import json
+        v = json.loads(Path(result["verdict_path"]).read_text())
+        assert v["verdict"] == "NOT_READY"
