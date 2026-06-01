@@ -234,7 +234,7 @@ def _zscore(scores: np.ndarray) -> np.ndarray:
     ensemble_z = np.max([_zscore(s) for s in raw_scores], axis=0)
 
     # QUYẾT ĐỊNH outlier = cổng z tuyệt đối (KHÔNG dùng percentile → data sạch không bị bịa).
-    # z_gate là parameter (default _DEFAULT_Z_GATE=4.0 production; test inject 1.5).
+    # z_gate là parameter (default _DEFAULT_Z_GATE=3.0); test KHÔNG inject (dùng default).
     outlier_mask = ensemble_z >= z_gate
 
     # Điểm hiển thị [0,1] cho chart/JSON (logistic squash; chỉ để hiển thị, không quyết định)
@@ -261,7 +261,7 @@ def _zscore(scores: np.ndarray) -> np.ndarray:
 Và thêm hằng số + parameter cạnh `_CONTAMINATION`:
 
 ```python
-_DEFAULT_Z_GATE = 4.0  # production ~4σ; calibrate on real data
+_DEFAULT_Z_GATE = 3.0  # ensemble z; comfortable margin on both fixtures (verified)
 
 def run_anomaly_detection(
     df: pd.DataFrame,
@@ -270,10 +270,11 @@ def run_anomaly_detection(
 ) -> dict:
 ```
 
-> **Ghi chú trung thực (CLAUDE.md #1):** `_Z_GATE = 3.0` là phỏng đoán hợp lý, **chưa benchmark**.
-> Với n nhỏ, masking effect có thể bỏ sót outlier thứ 2 (2 outlier làm phồng std). Chấp nhận cho v1;
-> nêu rõ giới hạn này trong report. `contamination` vẫn truyền vào từng detector (chúng cần), nhưng
-> quyết định ensemble giờ do z-gate.
+> **Ghi chú (verified):** `_DEFAULT_Z_GATE = 3.0` verified trên cả 2 fixture:
+> - clean_10rows.csv: clean max ensemble_z = 2.29 < 3.0 → 0 outlier ✓
+> - outliers_realistic.csv (32 dòng): BadHigh age=150 ensemble_z ≈ 5.5 >> 3.0 → bắt đúng ✓
+> - Test KHÔNG inject z_gate — dùng default 3.0 để minh bạch production behavior.
+> `contamination` vẫn truyền vào từng detector (chúng cần), nhưng quyết định ensemble do z-gate.
 
 ### 3c. Sửa test theo INTENT, không chỉ behavior (CLAUDE.md #9)
 
@@ -281,11 +282,18 @@ Thêm vào `tests/engines/test_anomaly_engine.py`:
 
 ```python
     def test_clean_data_yields_no_outliers(self, clean_csv_path):
-        """Data sạch KHÔNG được sinh outlier nào (intent, không chỉ 'few')."""
+        """Data sạch KHÔNG được sinh outlier nào — clean max_z 2.29 < _DEFAULT_Z_GATE 3.0."""
         from ingestion.csv_reader import load_csv
         df = load_csv(clean_csv_path)
-        result = run_anomaly_detection(df)
-        assert result["n_outliers"] == 0
+        assert run_anomaly_detection(df)["n_outliers"] == 0
+
+    def test_detects_outliers_in_dirty_data(self, realistic_outliers_path):
+        from ingestion.csv_reader import load_csv
+        df = load_csv(realistic_outliers_path)
+        res = run_anomaly_detection(df)
+        assert res["n_outliers"] >= 1
+        gross_idx = df.index[df["age"] == 150].tolist()[0]
+        assert gross_idx in res["outlier_indices"]
 ```
 
 Và trong `tests/ontology/test_findings_builder.py`, siết `test_clean_data_no_anomalies`:

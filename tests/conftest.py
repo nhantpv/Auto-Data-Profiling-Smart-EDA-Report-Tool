@@ -10,3 +10,7 @@ def clean_csv_path():
 @pytest.fixture
 def dirty_csv_path():
     return str(FIXTURES_DIR / "dirty_with_outliers.csv")
+
+@pytest.fixture
+def realistic_outliers_path():
+    return str(FIXTURES_DIR / "outliers_realistic.csv")
