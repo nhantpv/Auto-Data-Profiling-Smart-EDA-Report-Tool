@@ -6,11 +6,14 @@ from ingestion.csv_reader import load_csv
 from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
+from engines.schema_engine import build_schema_findings
 from ontology.findings_builder import build_data_quality_findings
-from ontology.models import DataQualityFindings, DatasetVerdict, Verdict
+from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings, Verdict
 from severity.calibrator import calibrate_columns, load_calibrator_table
 from severity.compound import apply_compound
 from severity.aggregator import aggregate
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class TestFullPipeline:
@@ -89,3 +92,78 @@ class TestFullPipeline:
         assert restored.summary.total_issues >= 0
         # Sanity: realistic fixture has no catastrophic missing → expect READY or WARN
         assert restored.verdict != Verdict.NOT_READY
+
+
+class TestSchemaIntegration:
+    def test_schema_bad_produces_not_ready_and_three_files(self, tmp_path):
+        csv_path = str(FIXTURES / "schema_bad.csv")
+        dbml_path = str(FIXTURES / "schema_bad.dbml")
+        df = load_csv(csv_path)
+
+        schema = build_schema_findings(df, csv_path, dbml_path)
+        error_types = {e.error_type for e in schema.integrity_errors}
+        assert "PK_DUPLICATE" in error_types
+        assert "TYPE_MISMATCH" in error_types
+        assert "UNIQUE_VIOLATION" in error_types
+        assert "MISSING_COLUMN" in error_types
+        assert "EXTRA_COLUMN" in error_types
+
+        # Verdict must be NOT_READY (has CRITICAL from PK_DUPLICATE + MISSING_COLUMN)
+        profile = run_profiling(df)
+        anomaly_result = run_anomaly_detection(df, profile_result=profile)
+        findings = build_data_quality_findings(
+            file_name="schema_bad.csv", df=df,
+            profile_result=profile, anomaly_result=anomaly_result,
+        )
+        table = load_calibrator_table()
+        col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
+        all_dq = apply_compound(findings.anomalies + col_findings)
+        verdict = aggregate(findings.dataset_meta, all_dq, integrity_errors=schema.integrity_errors)
+
+        assert verdict.verdict == Verdict.NOT_READY
+        assert verdict.summary.critical >= 1
+
+        # Three files
+        for name, obj in [
+            ("data_quality_findings.json", findings),
+            ("schema_evaluation_findings.json", schema),
+            ("dataset_verdict.json", verdict),
+        ]:
+            p = tmp_path / name
+            p.write_text(obj.model_dump_json(indent=2), encoding="utf-8")
+            assert p.exists()
+
+    def test_schema_ok_produces_ready(self, tmp_path):
+        csv_path = str(FIXTURES / "schema_ok.csv")
+        dbml_path = str(FIXTURES / "schema_ok.dbml")
+        df = load_csv(csv_path)
+
+        schema = build_schema_findings(df, csv_path, dbml_path)
+        # No blocking errors on a clean fixture
+        critical = [e for e in schema.integrity_errors if e.severity.value == "CRITICAL"]
+        assert critical == []
+
+        profile = run_profiling(df)
+        anomaly_result = run_anomaly_detection(df, profile_result=profile)
+        findings = build_data_quality_findings(
+            file_name="schema_ok.csv", df=df,
+            profile_result=profile, anomaly_result=anomaly_result,
+        )
+        table = load_calibrator_table()
+        col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
+        all_dq = apply_compound(findings.anomalies + col_findings)
+        verdict = aggregate(findings.dataset_meta, all_dq, integrity_errors=schema.integrity_errors)
+        assert verdict.verdict == Verdict.READY
+
+    def test_no_dbml_produces_two_files_unchanged(self, realistic_outliers_path, tmp_path):
+        """Without DBML the pipeline must still produce exactly 2 files and not crash."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+        import importlib
+        import run_pipeline
+        importlib.reload(run_pipeline)
+
+        result = run_pipeline.run(realistic_outliers_path, str(tmp_path), dbml_path=None)
+        assert Path(result["dq_path"]).exists()
+        assert Path(result["verdict_path"]).exists()
+        assert "schema_path" not in result

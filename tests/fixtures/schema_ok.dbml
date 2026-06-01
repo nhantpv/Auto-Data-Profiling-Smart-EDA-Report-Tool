@@ -1,0 +1,5 @@
+Table schema_ok {
+  id integer [pk]
+  name varchar [not null]
+  score float
+}

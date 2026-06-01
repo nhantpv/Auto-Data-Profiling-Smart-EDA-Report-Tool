@@ -1,0 +1,6 @@
+Table customers {
+  id integer [pk]
+  email varchar [unique]
+  age integer
+  phone varchar
+}
