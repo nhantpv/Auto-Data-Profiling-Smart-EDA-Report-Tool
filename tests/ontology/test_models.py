@@ -128,3 +128,28 @@ class TestColumnZeros:
     def test_n_zeros_optional(self):
         assert ColumnStats(type="Categorical", n_missing=0, p_missing=0.0).n_zeros is None
         assert ColumnStats(type="Numeric", n_missing=0, p_missing=0.0, n_zeros=5).n_zeros == 5
+
+
+class TestAnomalyRecordAffectedColumn:
+    def test_affected_column_set(self):
+        rec = AnomalyRecord(
+            issue_type="MISSINGNESS",
+            description="bmi has 20% missing",
+            severity="WARN",
+            affected_count=200,
+            affected_percent=0.2,
+            top_10_samples=[],
+            affected_column="bmi",
+        )
+        assert rec.affected_column == "bmi"
+
+    def test_affected_column_default_none(self):
+        rec = AnomalyRecord(
+            issue_type="OUTLIER_ENSEMBLE",
+            description="multivariate outliers",
+            severity="HIGH",
+            affected_count=5,
+            affected_percent=0.05,
+            top_10_samples=[],
+        )
+        assert rec.affected_column is None

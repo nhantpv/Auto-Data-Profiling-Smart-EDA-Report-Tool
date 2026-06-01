@@ -46,6 +46,7 @@ class AnomalyRecord(BaseModel):
     confidence: Optional[float] = None
     affected_count: int
     affected_percent: float
+    affected_column: Optional[str] = None
     top_10_samples: List[Dict[str, Any]]
     diagnostic_chart: Optional[str] = None
     full_anomalies_export_path: Optional[str] = None
