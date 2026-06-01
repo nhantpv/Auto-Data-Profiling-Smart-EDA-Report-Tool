@@ -50,3 +50,24 @@ class TestSchemaEvaluationFindings:
         json_str = findings.model_dump_json()
         restored = SchemaEvaluationFindings.model_validate_json(json_str)
         assert restored.schema_meta.dbml_file == "x.dbml"
+
+
+class TestIntegrityErrorAffectedColumn:
+    def test_affected_column_set(self):
+        err = IntegrityError(
+            error_type="TYPE_MISMATCH",
+            description="age has wrong type",
+            severity="HIGH",
+            affected_table="users",
+            affected_column="age",
+        )
+        assert err.affected_column == "age"
+
+    def test_affected_column_default_none(self):
+        err = IntegrityError(
+            error_type="ORPHAN_FOREIGN_KEY",
+            description="orphan rows",
+            severity="CRITICAL",
+            affected_table="orders",
+        )
+        assert err.affected_column is None

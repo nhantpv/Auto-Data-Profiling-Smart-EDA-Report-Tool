@@ -96,6 +96,7 @@ class IntegrityError(BaseModel):
     severity: Severity
     affected_table: str
     affected_count: int = 0
+    affected_column: Optional[str] = None
     dq_dimensions: List[str] = Field(default_factory=list)
     ml_impact: List[str] = Field(default_factory=list)
     compound_severity: Optional[Severity] = None
