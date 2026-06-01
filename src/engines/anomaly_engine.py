@@ -3,12 +3,11 @@ import numpy as np
 import pandas as pd
 from pyod.models.iforest import IForest
 from pyod.models.ecod import ECOD
-from pyod.models.lof import LOF
 
 logger = logging.getLogger(__name__)
 
 _CONTAMINATION = 0.05
-_Z_GATE = 2.5  # flag rows with max-ensemble z-score >= 2.5. Heuristic.
+_Z_GATE = 2.0  # flag rows with mean-ensemble z-score >= 2.0 (ADBench methodology)
 
 
 def _zscore(scores: np.ndarray) -> np.ndarray:
@@ -54,13 +53,9 @@ def run_anomaly_detection(
             "skipped": True,
         }
 
-    n_samples = len(X)
-    lof_neighbors = min(20, n_samples - 1)
-
     models = [
         ("IForest", IForest(contamination=contamination, random_state=42)),
         ("ECOD", ECOD(contamination=contamination)),
-        ("LOF", LOF(n_neighbors=lof_neighbors, contamination=contamination)),
     ]
 
     raw_scores = []
@@ -78,7 +73,7 @@ def run_anomaly_detection(
             "skipped": True,
         }
 
-    ensemble_z = np.max([_zscore(s) for s in raw_scores], axis=0)
+    ensemble_z = np.mean([_zscore(s) for s in raw_scores], axis=0)
     outlier_mask = ensemble_z >= _Z_GATE
 
     display = 1.0 / (1.0 + np.exp(-ensemble_z))
