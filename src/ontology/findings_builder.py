@@ -5,11 +5,12 @@ from typing import Dict, Any
 from ontology.models import (
     DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Severity,
 )
+from severity.missingness import detect_missingness
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_column_stats(variables: Dict[str, Any]) -> Dict[str, ColumnStats]:
+def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | None = None) -> Dict[str, ColumnStats]:
     columns = {}
     for col_name, col_data in variables.items():
         col_type = col_data.get("type", "Unknown")
@@ -18,7 +19,7 @@ def _extract_column_stats(variables: Dict[str, Any]) -> Dict[str, ColumnStats]:
             "Boolean": "Boolean", "DateTime": "DateTime",
             "Unsupported": "Unsupported",
         }
-        simple_type = type_map.get(col_type, "Unknown")
+        simple_type = type_map.get(col_type, col_type)
 
         n_missing = col_data.get("n_missing", 0)
         p_missing = col_data.get("p_missing", 0.0)
@@ -41,6 +42,7 @@ def _extract_column_stats(variables: Dict[str, Any]) -> Dict[str, ColumnStats]:
             p_missing=float(p_missing),
             n_zeros=int(n_zeros) if n_zeros is not None else None,  # PATCH 2
             n_distinct=int(n_distinct) if n_distinct is not None else None,
+            missingness_mechanism=(mechs or {}).get(col_name),
             additional_metrics=extra,
         )
     return columns
@@ -64,7 +66,8 @@ def build_data_quality_findings(
         p_duplicates=float(table.get("p_duplicates", 0.0)),
     )
 
-    columns = _extract_column_stats(profile_result.get("variables", {}))
+    mechs = detect_missingness(df)
+    columns = _extract_column_stats(profile_result.get("variables", {}), mechs=mechs)
 
     anomalies = []
 
