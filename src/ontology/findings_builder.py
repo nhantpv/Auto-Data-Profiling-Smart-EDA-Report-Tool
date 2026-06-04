@@ -6,8 +6,19 @@ from ontology.models import (
     DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Severity,
 )
 from severity.missingness import detect_missingness
+from severity.calibrator import load_calibrator_table
 
 logger = logging.getLogger(__name__)
+
+
+def _threshold_severity(value: float, thresholds: list, fallback: Severity = Severity.WARN) -> Severity:
+    """Lookup severity from calibrator thresholds. Falls back if no thresholds."""
+    if not thresholds:
+        return fallback
+    for entry in thresholds:
+        if value < entry["max"]:
+            return Severity(entry["severity"])
+    return Severity.CRITICAL
 
 
 def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | None = None) -> Dict[str, ColumnStats]:
@@ -53,6 +64,7 @@ def build_data_quality_findings(
     df: pd.DataFrame,
     profile_result: dict,
     anomaly_result: dict,
+    mechs: dict | None = None,
 ) -> DataQualityFindings:
     table = profile_result.get("table", {})
 
@@ -66,8 +78,11 @@ def build_data_quality_findings(
         p_duplicates=float(table.get("p_duplicates", 0.0)),
     )
 
-    mechs = detect_missingness(df)
+    if mechs is None:
+        mechs = detect_missingness(df)
     columns = _extract_column_stats(profile_result.get("variables", {}), mechs=mechs)
+
+    cal_table = load_calibrator_table()
 
     anomalies = []
 
@@ -86,11 +101,13 @@ def build_data_quality_findings(
             top_samples.append(row)
 
         ratio = n_outliers / meta.n
+        outlier_cfg = cal_table.get("outlier_ensemble", {})
+        outlier_sev = _threshold_severity(ratio, outlier_cfg.get("thresholds", []))
         anomalies.append(AnomalyRecord(
             issue_type="OUTLIER_ENSEMBLE",
             description=f"Phát hiện {n_outliers} dòng dị biệt ({ratio*100:.1f}% data)",
-            severity=Severity.HIGH if ratio > 0.05 else Severity.WARN,
-            dq_dimensions=["Accuracy"],
+            severity=outlier_sev,
+            dq_dimensions=[outlier_cfg.get("dq_dimension", "Accuracy")],
             ml_impact=["training_bias"] if ratio > 0.05 else [],
             confidence=round(float(np.mean(outlier_scores)), 4) if outlier_scores else None,
             affected_count=n_outliers,
@@ -102,15 +119,17 @@ def build_data_quality_findings(
     if meta.n_duplicates > 0:
         dup_df = df[df.duplicated(keep=False)]
         dup_samples = dup_df.head(10).to_dict(orient="records")
+        dup_cfg = cal_table.get("duplicate", {})
+        dup_sev = _threshold_severity(meta.p_duplicates, dup_cfg.get("thresholds", []))
         anomalies.append(AnomalyRecord(
             issue_type="DUPLICATE",
             description=f"Phát hiện {meta.n_duplicates} dòng trùng lặp ({meta.p_duplicates*100:.1f}% data)",
-            severity=Severity.WARN if meta.p_duplicates < 0.05 else Severity.HIGH,
-            dq_dimensions=["Uniqueness"],
+            severity=dup_sev,
+            dq_dimensions=[dup_cfg.get("dq_dimension", "Uniqueness")],
             ml_impact=["training_bias"] if meta.p_duplicates > 0.05 else [],
             affected_count=meta.n_duplicates,
             affected_percent=meta.p_duplicates,
-            top_10_samples=dup_samples,
+            top_10_samples=dup_samples,  # type: ignore[arg-type]
         ))
 
     return DataQualityFindings(

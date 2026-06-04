@@ -17,6 +17,7 @@ from ontology.models import DatasetMeta
 from severity.calibrator import calibrate_columns, load_calibrator_table
 from severity.compound import apply_compound
 from severity.aggregator import aggregate
+from severity.missingness import detect_missingness
 
 
 def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) -> dict:
@@ -25,12 +26,18 @@ def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) ->
 
     df = load_csv(csv_path)
     profile = run_profiling(df)
-    anomaly_result = run_anomaly_detection(df, profile_result=profile)
+    anomaly_result = run_anomaly_detection(df)
+
+    # Layer 2.5a — Missingness classification (MCAR/MAR/MNAR)
+    mechs = detect_missingness(df)
+
+    # Layer 3 — Build findings JSON
     findings = build_data_quality_findings(
         file_name=Path(csv_path).name,
         df=df,
         profile_result=profile,
         anomaly_result=anomaly_result,
+        mechs=mechs,
     )
 
     table = load_calibrator_table()
@@ -61,13 +68,16 @@ def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) ->
     return output_paths
 
 
-def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str = None) -> dict:
+def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str | None = None) -> dict:
     """Multi-table mode: N CSVs + 1 DBML → schema_evaluation_findings.json + dataset_verdict.json.
     No data-quality profiling per table in this mode (per plan 1b scope).
     verdict meta: aggregate row count and var count across all loaded tables.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+
+    if dbml_path is None:
+        raise ValueError("--multi mode requires --dbml <schema.dbml>")
 
     schema = validate_schema_multi(csv_paths, dbml_path)
 
@@ -82,7 +92,7 @@ def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str = None) -
         except Exception:
             pass
     meta = DatasetMeta(
-        file_name=Path(dbml_path).name,
+        file_name=Path(dbml_path).name if dbml_path else "unknown",
         n=total_n,
         n_var=total_vars,
         memory_size=0,

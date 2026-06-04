@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sơ Đồ Luồng Dữ Liệu - Smart EDA</title>
+    <!-- Tải thư viện Mermaid JS từ CDN -->
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true, 
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column;
+            align-items: center; 
+            background-color: #f8f9fa; 
+            padding: 20px; 
+            margin: 0;
+        }
+        h2 { color: #333; margin-bottom: 5px; }
+        p { color: #666; margin-bottom: 20px; font-size: 14px; }
+        .mermaid-container { 
+            background-color: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
+            width: 95%; /* Mở rộng tối đa */
+            overflow-x: auto;
+            display: flex;
+            justify-content: center;
+        }
+        /* Ép SVG của Mermaid hiển thị to ra */
+        .mermaid svg {
+            width: 100%;
+            height: auto;
+            min-height: 80vh;
+        }
+    </style>
+</head>
+<body>
+    <h2>Sơ Đồ Kiến Trúc Hệ Thống (Data Flow)</h2>
+    <p>Cuộn chuột hoặc phóng to/thu nhỏ trình duyệt để xem rõ các chi tiết.</p>
+
+    <div class="mermaid-container">
+        <div class="mermaid">
+        graph TD
+            classDef input fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
+            classDef engine fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
+            classDef artifact fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
+            classDef agent fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+
+            %% INPUT
+            subgraph L0 ["Layer 0: Data Ingestion (Đầu vào)"]
+                D1["Data Files (CSV/Excel)"]:::input
+                S1["Schema File (DBML)"]:::input
+            end
+
+            %% ENGINES (L1 & L2)
+            subgraph L1_L2 ["Layer 1 & 2: Deterministic & ML Engines (Bộ máy phân tích)"]
+                E1["fg-data-profiling (L1)"]:::engine
+                E2["PyOD Anomaly (L2)"]:::engine
+                E3["DBML Validator (L2)"]:::engine
+            end
+
+            D1 --> E1
+            D1 --> E2
+            D1 & S1 --> E3
+
+            %% SEVERITY STACK (L2.5)
+            subgraph L2_5 ["Layer 2.5: Severity Stack (Đánh giá mức độ)"]
+                SS1["MCAR/MAR/MNAR Detector"]:::engine
+                SS2["Calibrator (tra bảng JSON)"]:::engine
+                SS3["CompoundEscalator"]:::engine
+                SS4["Aggregator (Dataset Verdict)"]:::engine
+            end
+
+            E1 --> SS1
+            E1 & E2 --> SS2
+            SS1 --> SS2
+            SS2 --> SS3
+            SS3 --> SS4
+
+            %% ONTOLOGY (L3 & L3.5)
+            subgraph L3 ["Layer 3 & 3.5: Artifacts & Charts (Đóng gói kết quả)"]
+                J1["data_quality_findings.json"]:::artifact
+                J2["schema_evaluation_findings.json"]:::artifact
+                J3["dataset_verdict.json"]:::artifact
+                C1["Overview Charts"]:::artifact
+                C2["Diagnostic Charts"]:::artifact
+            end
+
+            SS3 --> J1
+            E3 --> J2
+            SS4 --> J3
+            E1 --> C1
+
+            %% LLM REPORTING (L4)
+            subgraph L4 ["Layer 4: LLM Multi-Agent Orchestration (Đội ngũ AI Báo cáo)"]
+                R1{"LLM Router"}:::agent
+                CA["Chart Architect Agent"]:::agent
+                A1["Mini Agent (Data QA)"]:::agent
+                A2["Mini Agent (Architect)"]:::agent
+                G1["🛑 Guardrail"]:::engine
+                M1["Master Agent (Executive)"]:::agent
+                G2["🛑 Guardrail"]:::engine
+            end
+
+            J1 & J3 & C1 --> R1
+            J2 --> R1
+            
+            R1 --> CA
+            CA -->|"Lệnh vẽ biểu đồ"| C2
+            C2 -->|"Trả ảnh"| A1
+            
+            R1 -->|"JSON + Overview Charts"| A1
+            R1 -->|"JSON DBML"| A2
+            
+            A1 & A2 --> G1
+            G1 -->|"Đã kiểm tra số liệu"| M1
+            M1 --> G2
+            G2 -->|"Tổng hợp"| OUT["Final EDA Markdown Report"]:::input
+        </div>
+    </div>
+</body>
+</html>

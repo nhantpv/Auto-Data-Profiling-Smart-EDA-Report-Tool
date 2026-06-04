@@ -17,7 +17,7 @@ def _mcar_df(n=300):
         "c": RNG.normal(0, 1, n),
     })
     mask = RNG.random(n) < 0.2
-    df.loc[mask, "a"] = None
+    df.loc[mask, "a"] = np.nan  # type: ignore[index]
     return df
 
 

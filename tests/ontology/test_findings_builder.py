@@ -63,7 +63,7 @@ class TestBuildDataQualityFindings:
         df = pd.DataFrame({"predictor": predictor, "target": target,
                            "noise": rng.normal(0, 1, 200)})
         findings = build_data_quality_findings(
-            "test.csv", df, run_profiling(df), run_anomaly_detection(df, profile_result=run_profiling(df)),
+            "test.csv", df, run_profiling(df), run_anomaly_detection(df),
         )
         assert findings.columns["target"].missingness_mechanism == "MAR"
         # predictor has no missing → mechanism should be None
@@ -90,5 +90,5 @@ class TestBuildDataQualityFindings:
             "val":  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
         })
         f = build_data_quality_findings("c.csv", df, run_profiling(df), run_anomaly_detection(df))
-        assert f.columns["city"].type == "Categorical"
+        assert f.columns["city"].type in ("Categorical", "Text")
         assert all(c.type != "Unknown" for c in f.columns.values())

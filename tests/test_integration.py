@@ -1,4 +1,5 @@
 """End-to-end integration test: CSV → Profile → Anomaly → JSON output."""
+# pyrefly: ignore [missing-import]
 import pytest
 import json
 from pathlib import Path
@@ -27,7 +28,7 @@ class TestFullPipeline:
         assert "table" in profile
 
         # Step 3: Layer 2 — Anomaly Detection
-        anomalies = run_anomaly_detection(df, profile_result=profile)
+        anomalies = run_anomaly_detection(df)
         assert anomalies["n_outliers"] >= 0
 
         # Step 4: Layer 3 — Build Findings
@@ -63,7 +64,7 @@ class TestFullPipeline:
     def test_severity_pipeline_produces_verdict_json(self, realistic_outliers_path, tmp_path):
         df = load_csv(realistic_outliers_path)
         profile = run_profiling(df)
-        anomalies = run_anomaly_detection(df, profile_result=profile)
+        anomalies = run_anomaly_detection(df)
         findings = build_data_quality_findings(
             file_name="outliers_realistic.csv",
             df=df,
@@ -111,7 +112,7 @@ class TestSchemaIntegration:
 
         # Verdict must be NOT_READY (has CRITICAL from PK_DUPLICATE + MISSING_COLUMN)
         profile = run_profiling(df)
-        anomaly_result = run_anomaly_detection(df, profile_result=profile)
+        anomaly_result = run_anomaly_detection(df)
         findings = build_data_quality_findings(
             file_name="schema_bad.csv", df=df,
             profile_result=profile, anomaly_result=anomaly_result,
@@ -145,7 +146,7 @@ class TestSchemaIntegration:
         assert critical == []
 
         profile = run_profiling(df)
-        anomaly_result = run_anomaly_detection(df, profile_result=profile)
+        anomaly_result = run_anomaly_detection(df)
         findings = build_data_quality_findings(
             file_name="schema_ok.csv", df=df,
             profile_result=profile, anomaly_result=anomaly_result,
@@ -161,6 +162,7 @@ class TestSchemaIntegration:
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         import importlib
+        # pyrefly: ignore [missing-import]
         import run_pipeline
         importlib.reload(run_pipeline)
 
@@ -222,6 +224,7 @@ class TestMultiTableIntegration:
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         import importlib
+        # pyrefly: ignore [missing-import]
         import run_pipeline
         importlib.reload(run_pipeline)
 

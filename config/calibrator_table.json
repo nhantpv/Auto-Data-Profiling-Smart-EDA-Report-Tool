@@ -9,6 +9,22 @@
     ],
     "dq_dimension": "Completeness"
   },
+  "outlier_ensemble": {
+    "metric": "outlier_ratio",
+    "thresholds": [
+      {"max": 0.05, "severity": "WARN"},
+      {"max": 1.01, "severity": "HIGH"}
+    ],
+    "dq_dimension": "Accuracy"
+  },
+  "duplicate": {
+    "metric": "p_duplicates",
+    "thresholds": [
+      {"max": 0.05, "severity": "WARN"},
+      {"max": 1.01, "severity": "HIGH"}
+    ],
+    "dq_dimension": "Uniqueness"
+  },
   "constant_column": {"rule": "n_distinct <= 1", "severity": "HIGH", "dq_dimension": "Uniqueness"},
   "high_cardinality": {"rule": "categorical and p_distinct > 0.9", "severity": "WARN", "dq_dimension": "Uniqueness"},
   "severe_imbalance": {"rule": "categorical and imbalance > 0.95", "severity": "WARN", "dq_dimension": "Consistency"}
