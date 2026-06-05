@@ -20,7 +20,7 @@ from severity.aggregator import aggregate
 from severity.missingness import detect_missingness
 
 
-def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) -> dict:
+def run(csv_path: str, out_dir: str = "output", schema_path: str | None = None) -> dict:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -47,12 +47,12 @@ def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) ->
     # Schema path (optional)
     integrity_errors = None
     output_paths = {}
-    if dbml_path:
-        schema = build_schema_findings(df, csv_path, dbml_path)
-        schema_path = out / "schema_evaluation_findings.json"
-        schema_path.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
-        print(f"schema_evaluation_findings.json → {schema_path}")
-        output_paths["schema_path"] = str(schema_path)
+    if schema_path:
+        schema = build_schema_findings(df, csv_path, schema_path)
+        schema_out = out / "schema_evaluation_findings.json"
+        schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
+        print(f"schema_evaluation_findings.json → {schema_out}")
+        output_paths["schema_path"] = str(schema_out)
         integrity_errors = schema.integrity_errors
 
     verdict = aggregate(findings.dataset_meta, all_dq, integrity_errors=integrity_errors)
@@ -68,18 +68,18 @@ def run(csv_path: str, out_dir: str = "output", dbml_path: str | None = None) ->
     return output_paths
 
 
-def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str | None = None) -> dict:
-    """Multi-table mode: N CSVs + 1 DBML → schema_evaluation_findings.json + dataset_verdict.json.
+def run_multi(csv_paths: list, out_dir: str = "output", schema_path: str | None = None) -> dict:
+    """Multi-table mode: N CSVs + 1 schema (.dbml/.sql) → schema_evaluation_findings.json + dataset_verdict.json.
     No data-quality profiling per table in this mode (per plan 1b scope).
     verdict meta: aggregate row count and var count across all loaded tables.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
-    if dbml_path is None:
-        raise ValueError("--multi mode requires --dbml <schema.dbml>")
+    if schema_path is None:
+        raise ValueError("--multi mode requires --schema <file.dbml|file.sql>")
 
-    schema = validate_schema_multi(csv_paths, dbml_path)
+    schema = validate_schema_multi(csv_paths, schema_path)
 
     # Build a synthetic meta for the verdict (totals across tables)
     total_n = 0
@@ -92,7 +92,7 @@ def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str | None = 
         except Exception:
             pass
     meta = DatasetMeta(
-        file_name=Path(dbml_path).name if dbml_path else "unknown",
+        file_name=Path(schema_path).name if schema_path else "unknown",
         n=total_n,
         n_var=total_vars,
         memory_size=0,
@@ -101,38 +101,38 @@ def run_multi(csv_paths: list, out_dir: str = "output", dbml_path: str | None = 
 
     verdict = aggregate(meta, dq_findings=[], integrity_errors=schema.integrity_errors)
 
-    schema_path = out / "schema_evaluation_findings.json"
+    schema_out = out / "schema_evaluation_findings.json"
     verdict_path = out / "dataset_verdict.json"
-    schema_path.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
+    schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
 
-    print(f"schema_evaluation_findings.json → {schema_path}")
+    print(f"schema_evaluation_findings.json → {schema_out}")
     print(f"dataset_verdict.json            → {verdict_path}")
-    return {"schema_path": str(schema_path), "verdict_path": str(verdict_path)}
+    return {"schema_path": str(schema_out), "verdict_path": str(verdict_path)}
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python run_pipeline.py <csv_path> [out_dir] [schema.dbml]")
-        print("       python run_pipeline.py --multi <csv1> <csv2> ... --dbml <schema.dbml> [--out <dir>]")
+        print("Usage: python run_pipeline.py <csv_path> [out_dir] [schema.dbml|schema.sql]")
+        print("       python run_pipeline.py --multi <csv1> <csv2> ... --schema <file.dbml|file.sql> [--out <dir>]")
         sys.exit(1)
 
     if sys.argv[1] == "--multi":
-        # multi-table mode: collect CSVs until --dbml flag
+        # multi-table mode: collect CSVs until --schema flag
         args = sys.argv[2:]
         try:
-            dbml_idx = args.index("--dbml")
+            schema_idx = args.index("--schema")
         except ValueError:
-            print("Error: --multi mode requires --dbml <schema.dbml>")
+            print("Error: --multi mode requires --schema <file.dbml|file.sql>")
             sys.exit(1)
-        csv_args = args[:dbml_idx]
-        dbml_arg = args[dbml_idx + 1]
+        csv_args = args[:schema_idx]
+        schema_arg = args[schema_idx + 1]
         out_arg = "output"
         if "--out" in args:
             out_arg = args[args.index("--out") + 1]
-        run_multi(csv_args, out_arg, dbml_arg)
+        run_multi(csv_args, out_arg, schema_arg)
     else:
         csv_arg = sys.argv[1]
         out_arg = sys.argv[2] if len(sys.argv) > 2 else "output"
-        dbml_arg = sys.argv[3] if len(sys.argv) > 3 else None
-        run(csv_arg, out_arg, dbml_arg)
+        schema_arg = sys.argv[3] if len(sys.argv) > 3 else None
+        run(csv_arg, out_arg, schema_arg)

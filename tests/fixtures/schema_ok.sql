@@ -1,0 +1,5 @@
+CREATE TABLE items (
+    id INTEGER PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    price DECIMAL
+);

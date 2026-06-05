@@ -80,7 +80,7 @@ class DatasetVerdict(BaseModel):
 
 
 class SchemaMeta(BaseModel):
-    dbml_file: str
+    schema_file: str
     total_tables: int
     total_relationships: int
 

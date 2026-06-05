@@ -146,27 +146,19 @@ src/ingestion/
 └── schema_reader.py  ← [MỚI] Đọc file .sql DDL, trả về cùng format với pydbml
 ```
 
-### Đề xuất cụ thể: 2 hướng tiếp cận
+#### ✅ Đã triển khai: Adapter Pattern (Phương án C)
 
-#### Hướng A: "Universal Schema Reader" (Khuyến nghị cho V1)
+Module `src/ingestion/schema_reader.py` đã được tạo với hàm `parse_schema()` auto-detect format:
+- `.dbml` → gọi `_parse_dbml()` (sử dụng `pydbml`)
+- `.sql` → gọi `_parse_sql_ddl()` (sử dụng `simple-ddl-parser`)
 
-Dựa trên kết luận từ cuộc thảo luận trước (người dùng tự export CSV + SQL DDL từ Database), module của bạn chỉ cần viết **1 file duy nhất**: `src/ingestion/schema_reader.py`.
-
-File này làm đúng 1 việc: Đọc file `.sql` (DDL) rồi trả về cùng cấu trúc dict mà `schema_engine.parse_dbml()` đang trả về. Nhờ đó, toàn bộ code phía sau (7 validators + FK check) **không cần sửa 1 dòng nào**.
-
+Cả 2 adapter trả về **Unified Schema Result** dict chuẩn hóa:
 ```python
-# Pseudocode — schema_reader.py
-from simple_ddl_parser import DDLParser
-
-def parse_sql_ddl(sql_path: str) -> dict:
-    """Đọc file .sql, trả về dict giống hệt parse_dbml()."""
-    ddl = Path(sql_path).read_text()
-    parsed = DDLParser(ddl).run()
-    # Transform sang format: {table_name: {columns: {col: {type, pk, unique, not_null}}}}
-    ...
+{"tables": {...}, "refs": [...], "meta": {...}}
 ```
 
-Sau đó, sửa `schema_engine.py` để auto-detect: nếu file đuôi `.dbml` thì gọi `parse_dbml()`, nếu file đuôi `.sql` thì gọi `parse_sql_ddl()`.
+`schema_engine.py` đã được refactor: không còn import `pydbml` trực tiếp, chỉ gọi `parse_schema()`.
+CLI đã đổi flag `--dbml` → `--schema` để hỗ trợ cả `.dbml` lẫn `.sql`.
 
 #### Hướng B: "Direct DB Connection" (Dành cho V2 — tự động hóa)
 

@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 import pandas as pd
 import pandas.api.types as pt
-from pydbml import PyDBML
+from ingestion.schema_reader import parse_schema
 from ontology.models import IntegrityError, Severity, SchemaEvaluationFindings, SchemaMeta, TableInfo
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ _SEVERITY = {
 
 def _base_type(dbml_type: str) -> str:
     """Strip size/precision: varchar(255) → varchar."""
-    return re.sub(r"\(.*?\)", "", str(dbml_type)).strip().lower()
+    return re.sub(r"\(.*?\)", "", dbml_type).strip().lower()
 
 
 def _pandas_family(dtype) -> str:
@@ -63,23 +63,7 @@ def _err(error_type: str, table: str, col: str | None, count: int,
     )
 
 
-# ── 1a-1: Parser + Matcher ────────────────────────────────────────────────────
-
-def parse_dbml(dbml_path: str) -> dict:
-    """pydbml → {table_name: {columns: {col_name: {type, pk, unique, not_null}}}}"""
-    db = PyDBML(Path(dbml_path).read_text(encoding="utf-8"))
-    result = {}
-    for t in db.tables:
-        cols = {}
-        for c in t.columns:
-            cols[c.name] = {
-                "type": str(c.type),
-                "pk": bool(c.pk),
-                "unique": bool(c.unique),
-                "not_null": bool(c.not_null),
-            }
-        result[t.name] = {"columns": cols}
-    return result
+# ── 1a-1: Matcher ─────────────────────────────────────────────────────────────
 
 
 def match_table(df: pd.DataFrame, parsed: dict, csv_path: str) -> str:
@@ -168,36 +152,7 @@ def validate_table(df: pd.DataFrame, table_name: str, parsed: dict) -> list:
     return errors
 
 
-# ── 1b-1: Ref normalizer ─────────────────────────────────────────────────────
-
-def normalize_refs(db) -> list:
-    """Normalize pydbml refs → [{child_table, fk_col, parent_table, pk_col}].
-    '>': col1=FK(child), col2=PK(parent).
-    '<': col2=FK(child), col1=PK(parent).
-    '-': skip (ambiguous one-to-one) + log.
-    Composite (len > 1): skip + log.
-    """
-    result = []
-    for r in db.refs:
-        if r.type == "-":
-            logger.info("Skipping one-to-one ref '%s' (not supported)", r)
-            continue
-        if len(r.col1) > 1 or len(r.col2) > 1:
-            logger.info("Skipping composite FK ref '%s' (not supported)", r)
-            continue
-        if r.type == ">":
-            child_table = r.col1[0].table.name
-            fk_col = r.col1[0].name
-            parent_table = r.col2[0].table.name
-            pk_col = r.col2[0].name
-        else:  # '<'
-            child_table = r.col2[0].table.name
-            fk_col = r.col2[0].name
-            parent_table = r.col1[0].table.name
-            pk_col = r.col1[0].name
-        result.append({"child_table": child_table, "fk_col": fk_col,
-                        "parent_table": parent_table, "pk_col": pk_col})
-    return result
+# ── (normalize_refs moved to ingestion/schema_reader.py) ─────────────────────
 
 
 # ── 1b-2: Orphan FK check ────────────────────────────────────────────────────
@@ -290,58 +245,63 @@ def check_foreign_keys(tables: dict, refs: list) -> list:
 
 # ── 1b-3: Multi-table ingestion + validation ──────────────────────────────────
 
-def load_tables(csv_paths: list, dbml_path: str) -> dict:
-    """Match each CSV to a DBML table by filename stem. Unmatched → log + skip."""
+def load_tables(csv_paths: list, parsed_tables: dict) -> dict:
+    """Match each CSV to a schema table by filename stem. Unmatched → log + skip."""
     from ingestion.csv_reader import load_csv
-    parsed = parse_dbml(dbml_path)
     result = {}
     for path in csv_paths:
         stem = Path(path).stem.lower()
-        matched = next((name for name in parsed if name.lower() == stem), None)
+        matched = next((name for name in parsed_tables if name.lower() == stem), None)
         if matched is None:
-            logger.warning("CSV '%s' does not match any DBML table — skipping.", path)
+            logger.warning("CSV '%s' does not match any schema table — skipping.", path)
             continue
         result[matched] = load_csv(path)
     return result
 
 
-def validate_schema_multi(csv_paths: list, dbml_path: str) -> SchemaEvaluationFindings:
-    """Run 7 single-table validators for each loaded table + FK checks across tables."""
-    tables = load_tables(csv_paths, dbml_path)
-    parsed = parse_dbml(dbml_path)
-    db = PyDBML(Path(dbml_path).read_text(encoding="utf-8"))
+def validate_schema_multi(csv_paths: list, schema_path: str) -> SchemaEvaluationFindings:
+    """Run 7 single-table validators + FK checks. Supports .dbml and .sql."""
+    schema = parse_schema(schema_path)
+    parsed = schema["tables"]
+    tables = load_tables(csv_paths, parsed)
 
     errors = []
     for tname, df in tables.items():
         errors += validate_table(df, tname, parsed)
-    errors += check_foreign_keys(tables, normalize_refs(db))
+    errors += check_foreign_keys(tables, schema["refs"])
 
     meta = SchemaMeta(
-        dbml_file=str(Path(dbml_path).name),
-        total_tables=len(db.tables),
-        total_relationships=len(db.refs),
+        schema_file=schema["meta"]["file_name"],
+        total_tables=schema["meta"]["total_tables"],
+        total_relationships=schema["meta"]["total_relationships"],
     )
-    table_infos = [TableInfo(name=t.name, columns=[c.name for c in t.columns]) for t in db.tables]
+    table_infos = [
+        TableInfo(name=tname, columns=list(tcols["columns"].keys()))
+        for tname, tcols in parsed.items()
+    ]
     return SchemaEvaluationFindings(schema_meta=meta, tables=table_infos, integrity_errors=errors)
 
 
 # ── 1a-3: Build SchemaEvaluationFindings ─────────────────────────────────────
 
-def build_schema_findings(df: pd.DataFrame, csv_path: str, dbml_path: str) -> SchemaEvaluationFindings:
-    parsed = parse_dbml(dbml_path)
+def build_schema_findings(df: pd.DataFrame, csv_path: str, schema_path: str) -> SchemaEvaluationFindings:
+    schema = parse_schema(schema_path)
+    parsed = schema["tables"]
     table_name = match_table(df, parsed, csv_path)
     errors = validate_table(df, table_name, parsed)
 
-    db = PyDBML(Path(dbml_path).read_text(encoding="utf-8"))
     meta = SchemaMeta(
-        dbml_file=str(Path(dbml_path).name),
-        total_tables=len(db.tables),
-        total_relationships=len(db.refs),
+        schema_file=schema["meta"]["file_name"],
+        total_tables=schema["meta"]["total_tables"],
+        total_relationships=schema["meta"]["total_relationships"],
     )
-    tables = [TableInfo(name=t.name, columns=[c.name for c in t.columns]) for t in db.tables]
+    table_infos = [
+        TableInfo(name=tname, columns=list(tcols["columns"].keys()))
+        for tname, tcols in parsed.items()
+    ]
 
     return SchemaEvaluationFindings(
         schema_meta=meta,
-        tables=tables,
+        tables=table_infos,
         integrity_errors=errors,
     )

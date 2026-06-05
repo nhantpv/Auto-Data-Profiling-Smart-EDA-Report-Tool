@@ -6,7 +6,7 @@ class TestSchemaEvaluationFindings:
     def test_valid_schema_findings(self):
         findings = SchemaEvaluationFindings(
             schema_meta=SchemaMeta(
-                dbml_file="ecommerce.dbml",
+                schema_file="ecommerce.dbml",
                 total_tables=3,
                 total_relationships=2,
             ),
@@ -32,7 +32,7 @@ class TestSchemaEvaluationFindings:
     def test_empty_errors(self):
         findings = SchemaEvaluationFindings(
             schema_meta=SchemaMeta(
-                dbml_file="clean.dbml", total_tables=2, total_relationships=1
+                schema_file="clean.dbml", total_tables=2, total_relationships=1
             ),
             tables=[TableInfo(name="t1", columns=["id"])],
             integrity_errors=[],
@@ -42,14 +42,14 @@ class TestSchemaEvaluationFindings:
     def test_roundtrip_json(self):
         findings = SchemaEvaluationFindings(
             schema_meta=SchemaMeta(
-                dbml_file="x.dbml", total_tables=1, total_relationships=0
+                schema_file="x.dbml", total_tables=1, total_relationships=0
             ),
             tables=[],
             integrity_errors=[],
         )
         json_str = findings.model_dump_json()
         restored = SchemaEvaluationFindings.model_validate_json(json_str)
-        assert restored.schema_meta.dbml_file == "x.dbml"
+        assert restored.schema_meta.schema_file == "x.dbml"
 
 
 class TestIntegrityErrorAffectedColumn:

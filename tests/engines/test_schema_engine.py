@@ -1,8 +1,8 @@
 import pytest
 import pandas as pd
 from pathlib import Path
-from pydbml import PyDBML
-from engines.schema_engine import parse_dbml, match_table, validate_table, normalize_refs, check_foreign_keys
+from ingestion.schema_reader import parse_schema
+from engines.schema_engine import match_table, validate_table, check_foreign_keys
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -32,11 +32,11 @@ Table products {
 # 1a-1: parse_dbml
 # ──────────────────────────────────────────────
 
-class TestParseDbml:
+class TestParseSchema:
     def _parse_inline(self, src, tmp_path):
         p = tmp_path / "schema.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_returns_dict_of_tables(self, tmp_path):
         parsed = self._parse_inline(_TWO_TABLE_DBML, tmp_path)
@@ -74,7 +74,7 @@ class TestMatchTable:
     def _parse_inline(self, src, tmp_path):
         p = tmp_path / "schema.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_single_table_auto_match(self, tmp_path):
         parsed = self._parse_inline(_ONE_TABLE_DBML, tmp_path)
@@ -125,7 +125,7 @@ class TestValidateTableMissingExtra:
     def _parsed(self, src, tmp_path):
         p = tmp_path / "s.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_missing_column_is_critical(self, tmp_path):
         parsed = self._parsed(_CUSTOMERS_DBML, tmp_path)
@@ -155,7 +155,7 @@ class TestValidateTableTypeMismatch:
     def _parsed(self, src, tmp_path):
         p = tmp_path / "s.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_integer_with_nulls_no_mismatch(self, tmp_path):
         # int column with nulls → pandas reads as float64 → should NOT be TYPE_MISMATCH
@@ -181,7 +181,7 @@ class TestValidateTablePkChecks:
     def _parsed(self, src, tmp_path):
         p = tmp_path / "s.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_pk_duplicate_is_critical(self, tmp_path):
         parsed = self._parsed(_CUSTOMERS_DBML, tmp_path)
@@ -215,7 +215,7 @@ class TestValidateTableNotNullUnique:
     def _parsed(self, src, tmp_path):
         p = tmp_path / "s.dbml"
         p.write_text(src)
-        return parse_dbml(str(p))
+        return parse_schema(str(p))["tables"]
 
     def test_not_null_violation_is_high(self, tmp_path):
         parsed = self._parsed(_SIMPLE_DBML, tmp_path)
@@ -294,9 +294,13 @@ Ref: a.id - b.a_id
 
 
 class TestNormalizeRefs:
-    def test_forward_ref_parsed_correctly(self):
-        from engines.schema_engine import normalize_refs
-        refs = normalize_refs(_db(_FK_DBML))
+    def _parse_refs(self, src, tmp_path):
+        p = tmp_path / "schema.dbml"
+        p.write_text(src)
+        return parse_schema(str(p))["refs"]
+
+    def test_forward_ref_parsed_correctly(self, tmp_path):
+        refs = self._parse_refs(_FK_DBML, tmp_path)
         assert len(refs) == 1
         r = refs[0]
         assert r["child_table"] == "orders"
@@ -304,9 +308,8 @@ class TestNormalizeRefs:
         assert r["parent_table"] == "users"
         assert r["pk_col"] == "id"
 
-    def test_reverse_ref_direction_flipped(self):
-        from engines.schema_engine import normalize_refs
-        refs = normalize_refs(_db(_FK_REVERSE_DBML))
+    def test_reverse_ref_direction_flipped(self, tmp_path):
+        refs = self._parse_refs(_FK_REVERSE_DBML, tmp_path)
         assert len(refs) == 1
         r = refs[0]
         assert r["child_table"] == "orders"
@@ -314,14 +317,12 @@ class TestNormalizeRefs:
         assert r["parent_table"] == "users"
         assert r["pk_col"] == "id"
 
-    def test_composite_ref_skipped(self):
-        from engines.schema_engine import normalize_refs
-        refs = normalize_refs(_db(_COMPOSITE_DBML))
+    def test_composite_ref_skipped(self, tmp_path):
+        refs = self._parse_refs(_COMPOSITE_DBML, tmp_path)
         assert refs == []
 
-    def test_dash_ref_skipped(self):
-        from engines.schema_engine import normalize_refs
-        refs = normalize_refs(_db(_DASH_DBML))
+    def test_dash_ref_skipped(self, tmp_path):
+        refs = self._parse_refs(_DASH_DBML, tmp_path)
         assert refs == []
 
 
@@ -330,8 +331,8 @@ class TestNormalizeRefs:
 # ──────────────────────────────────────────────
 
 class TestCheckForeignKeys:
-    def _refs_for_shop(self):
-        from engines.schema_engine import normalize_refs
+    def _refs_for_shop(self, tmp_path=None):
+        import tempfile
         src = """
 Table users {
   id integer [pk]
@@ -344,7 +345,11 @@ Table orders {
 }
 Ref: orders.user_id > users.id
 """
-        return normalize_refs(_db(src))
+        if tmp_path is None:
+            tmp_path = Path(tempfile.mkdtemp())
+        p = tmp_path / "shop.dbml"
+        p.write_text(src)
+        return parse_schema(str(p))["refs"]
 
     def test_orphan_detected(self):
         refs = self._refs_for_shop()

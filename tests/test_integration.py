@@ -99,10 +99,10 @@ class TestFullPipeline:
 class TestSchemaIntegration:
     def test_schema_bad_produces_not_ready_and_three_files(self, tmp_path):
         csv_path = str(FIXTURES / "schema_bad.csv")
-        dbml_path = str(FIXTURES / "schema_bad.dbml")
+        schema_path = str(FIXTURES / "schema_bad.dbml")
         df = load_csv(csv_path)
 
-        schema = build_schema_findings(df, csv_path, dbml_path)
+        schema = build_schema_findings(df, csv_path, schema_path)
         error_types = {e.error_type for e in schema.integrity_errors}
         assert "PK_DUPLICATE" in error_types
         assert "TYPE_MISMATCH" in error_types
@@ -137,10 +137,10 @@ class TestSchemaIntegration:
 
     def test_schema_ok_produces_ready(self, tmp_path):
         csv_path = str(FIXTURES / "schema_ok.csv")
-        dbml_path = str(FIXTURES / "schema_ok.dbml")
+        schema_path = str(FIXTURES / "schema_ok.dbml")
         df = load_csv(csv_path)
 
-        schema = build_schema_findings(df, csv_path, dbml_path)
+        schema = build_schema_findings(df, csv_path, schema_path)
         # No blocking errors on a clean fixture
         critical = [e for e in schema.integrity_errors if e.severity.value == "CRITICAL"]
         assert critical == []
@@ -157,8 +157,8 @@ class TestSchemaIntegration:
         verdict = aggregate(findings.dataset_meta, all_dq, integrity_errors=schema.integrity_errors)
         assert verdict.verdict == Verdict.READY
 
-    def test_no_dbml_produces_two_files_unchanged(self, realistic_outliers_path, tmp_path):
-        """Without DBML the pipeline must still produce exactly 2 files and not crash."""
+    def test_no_schema_produces_two_files_unchanged(self, realistic_outliers_path, tmp_path):
+        """Without schema the pipeline must still produce exactly 2 files and not crash."""
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         import importlib
@@ -166,7 +166,7 @@ class TestSchemaIntegration:
         import run_pipeline
         importlib.reload(run_pipeline)
 
-        result = run_pipeline.run(realistic_outliers_path, str(tmp_path), dbml_path=None)
+        result = run_pipeline.run(realistic_outliers_path, str(tmp_path), schema_path=None)
         assert Path(result["dq_path"]).exists()
         assert Path(result["verdict_path"]).exists()
         assert "schema_path" not in result
@@ -176,9 +176,9 @@ class TestMultiTableIntegration:
     MULTI = FIXTURES / "multi"
 
     def test_orphan_fk_detected_not_ready(self):
-        dbml = str(self.MULTI / "shop.dbml")
+        schema = str(self.MULTI / "shop.dbml")
         csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
-        findings = validate_schema_multi(csvs, dbml)
+        findings = validate_schema_multi(csvs, schema)
 
         error_types = {e.error_type for e in findings.integrity_errors}
         assert "ORPHAN_FOREIGN_KEY" in error_types
@@ -196,24 +196,24 @@ class TestMultiTableIntegration:
         assert verdict.verdict == Verdict.NOT_READY
 
     def test_null_fk_not_counted_as_orphan(self):
-        dbml = str(self.MULTI / "shop.dbml")
+        schema = str(self.MULTI / "shop.dbml")
         csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
-        findings = validate_schema_multi(csvs, dbml)
+        findings = validate_schema_multi(csvs, schema)
         orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
         # orders row 104 (user_id=null) must NOT be counted
         assert orphans[0].affected_count == 1
 
     def test_clean_orders_no_orphan(self):
-        dbml = str(self.MULTI / "shop.dbml")
+        schema = str(self.MULTI / "shop.dbml")
         csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders_clean.csv")]
-        findings = validate_schema_multi(csvs, dbml)
+        findings = validate_schema_multi(csvs, schema)
         orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
         assert orphans == []
 
     def test_schema_meta_covers_all_tables(self):
-        dbml = str(self.MULTI / "shop.dbml")
+        schema = str(self.MULTI / "shop.dbml")
         csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
-        findings = validate_schema_multi(csvs, dbml)
+        findings = validate_schema_multi(csvs, schema)
         assert findings.schema_meta.total_tables == 2
         assert findings.schema_meta.total_relationships == 1
         table_names = {t.name for t in findings.tables}
@@ -229,8 +229,8 @@ class TestMultiTableIntegration:
         importlib.reload(run_pipeline)
 
         csvs = [str(self.MULTI / "users.csv"), str(self.MULTI / "orders.csv")]
-        dbml = str(self.MULTI / "shop.dbml")
-        result = run_pipeline.run_multi(csvs, str(tmp_path), dbml)
+        schema = str(self.MULTI / "shop.dbml")
+        result = run_pipeline.run_multi(csvs, str(tmp_path), schema)
 
         assert Path(result["schema_path"]).exists()
         assert Path(result["verdict_path"]).exists()
