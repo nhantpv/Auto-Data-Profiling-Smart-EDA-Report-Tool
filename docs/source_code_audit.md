@@ -21,7 +21,7 @@ src/
 │   ├── profiling_engine.py  ydata-profiling wrapper
 │   ├── anomaly_engine.py    PyOD Ensemble (IForest + ECOD + LOF)
 │   ├── schema_engine.py     pydbml parser + 7 validators + FK check
-│   └── visualizer.py        Diagnostic scatter chart
+│   └── visualizer.py        Optional chart artifact cho end user
 ├── ontology/           ← Layer 3 (JSON Ontology)
 │   ├── models.py            Pydantic models (15 classes)
 │   └── findings_builder.py  Phễu lọc ydata → JSON nén
@@ -32,6 +32,8 @@ src/
 │   └── aggregator.py        Dataset Verdict (READY/WARN/NOT_READY)
 ├── guardrail/          ← Layer 4 (Guardrail) — CHỈ CÓ __init__.py TRỐNG
 │   └── __init__.py
+├── reporting/          ← Text report fallback
+│   └── summary_renderer.py  Markdown deterministic từ JSON/verdict
 config/
 └── calibrator_table.json
 tests/                  ← 238 dòng integration + unit tests
@@ -41,7 +43,7 @@ tests/                  ← 238 dòng integration + unit tests
 
 | Layer (Thiết kế) | Module Code | Trạng thái | Ghi chú |
 |:---|:---|:---:|:---|
-| L0: Data Ingestion | `ingestion/` | ✅ Hoàn thành | CSV, Excel, Parquet. Có sampling 500k dòng. |
+| L0: Data Ingestion | `ingestion/` | ✅ Hoàn thành | CSV, Excel, Parquet, JSON/JSONL. Có sampling 500k dòng. |
 | L1: Deterministic Profiling | `engines/profiling_engine.py` | ✅ Hoàn thành | ydata-profiling, tự đếm duplicates. |
 | L2 NV1: PyOD Ensemble | `engines/anomaly_engine.py` | ✅ Hoàn thành | IForest + ECOD + LOF. Z-score combiner. |
 | L2 NV2: DBML Validator | `engines/schema_engine.py` | ✅ Hoàn thành | 7 loại lỗi + FK orphan check. Multi-table. |
@@ -51,10 +53,10 @@ tests/                  ← 238 dòng integration + unit tests
 | L2.5d: Aggregator | `severity/aggregator.py` | ✅ Hoàn thành | READY/WARN/NOT_READY verdict. |
 | L3: Pydantic Ontology | `ontology/models.py` | ✅ Hoàn thành | 15 Pydantic classes, Severity enum, C1 fields. |
 | L3: FindingsBuilder | `ontology/findings_builder.py` | ✅ Hoàn thành | Phễu lọc ydata → JSON nén. |
-| L3.5: Diagnostic Charts | `engines/visualizer.py` | ⚠️ Một phần | Scatter chart có. Overview Charts chưa trích xuất. |
+| L3.5: Diagnostic Charts | `engines/visualizer.py` | ⚠️ Một phần | Scatter chart có; chart chỉ là artifact phụ trợ, không đi vào L4. |
 | L4: Guardrail | `guardrail/__init__.py` | ❌ Trống | Chưa code gì. |
 | L4: Multi-Agent LLM | *(không có)* | ❌ Chưa có | Chưa có code LLM nào. |
-| Output: 3 file JSON | `run_pipeline.py` | ✅ Hoàn thành | data_quality + schema_eval + verdict. |
+| Output: JSON + Markdown | `run_pipeline.py` | ✅ Hoàn thành | data_quality + schema_eval + verdict + summary_report.md. |
 
 ---
 
@@ -82,7 +84,7 @@ Code dùng `dropna()` (loại bỏ dòng có NaN) thay vì điền Median trư�
 
 ### 5. Test coverage rất tốt
 - **Unit tests:** Mỗi module `severity/` và `engines/` đều có file test riêng.
-- **Integration test:** 238 dòng test end-to-end chạy từ CSV → JSON → Verdict.
+- **Integration test:** test end-to-end chạy từ data file → JSON → Verdict → Markdown.
 - **Fixtures thực tế:** Có `outliers_realistic.csv`, `schema_bad.csv/dbml`, thư mục `multi/` cho multi-table.
 
 ### 6. Ingestion Module thiết kế mở rộng tốt

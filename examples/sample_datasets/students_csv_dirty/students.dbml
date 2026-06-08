@@ -1,0 +1,10 @@
+Table students {
+  student_id integer [pk]
+  student_name varchar [not null]
+  age integer
+  score decimal
+  email varchar [unique]
+  school_id varchar [not null]
+  enrolled_at date
+  homeroom varchar
+}

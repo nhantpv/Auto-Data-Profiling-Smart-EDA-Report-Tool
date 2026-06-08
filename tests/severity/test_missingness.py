@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from severity.missingness import (
     little_mcar_pvalue, mar_auc, classify_missingness, detect_missingness,
-    _MAR_AUC_GATE, _MCAR_ALPHA,
+    sample_missingness_frame, _MAR_AUC_GATE, _MCAR_ALPHA, _MAX_MISSINGNESS_ROWS,
 )
 
 RNG = np.random.default_rng(42)
@@ -150,3 +150,41 @@ class TestDetectMissingness:
         result = detect_missingness(df)
         assert "target" in result
         assert result["target"] == "MAR"
+
+    def test_sampling_caps_large_frame_and_preserves_missing_rows(self):
+        df = pd.DataFrame({
+            "a": np.arange(20_000, dtype=float),
+            "b": np.arange(20_000, dtype=float),
+        })
+        df.loc[:49, "a"] = np.nan
+
+        sampled = sample_missingness_frame(df)
+
+        assert len(sampled) == _MAX_MISSINGNESS_ROWS
+        assert sampled["a"].isna().sum() == 50
+
+    def test_detect_missingness_runs_diagnostics_on_sample(self, monkeypatch):
+        seen_lengths = []
+
+        def fake_mcar(frame):
+            seen_lengths.append(len(frame))
+            return None
+
+        def fake_auc(frame, col):
+            seen_lengths.append(len(frame))
+            return None
+
+        monkeypatch.setattr("severity.missingness.little_mcar_pvalue", fake_mcar)
+        monkeypatch.setattr("severity.missingness.mar_auc", fake_auc)
+
+        df = pd.DataFrame({
+            "a": np.arange(20_000, dtype=float),
+            "b": np.arange(20_000, dtype=float),
+        })
+        df.loc[:99, "a"] = np.nan
+
+        result = detect_missingness(df)
+
+        assert result == {"a": None}
+        assert seen_lengths
+        assert max(seen_lengths) == _MAX_MISSINGNESS_ROWS

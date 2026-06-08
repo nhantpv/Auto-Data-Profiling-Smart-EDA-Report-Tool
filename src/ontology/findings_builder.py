@@ -2,6 +2,7 @@ import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any
+from pathlib import Path
 from ontology.models import (
     DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Severity,
 )
@@ -9,6 +10,53 @@ from severity.missingness import detect_missingness
 from severity.calibrator import load_calibrator_table
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_artifact_stem(name: str) -> str:
+    stem = Path(name).stem or "dataset"
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in stem)
+    return safe.strip("_") or "dataset"
+
+
+def _write_csv_artifact(df: pd.DataFrame, artifact_dir: str | Path | None, file_name: str) -> str | None:
+    if artifact_dir is None:
+        return None
+    out = Path(artifact_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / file_name
+    df.to_csv(path, index=False)
+    return str(path)
+
+
+def _outlier_rows(
+    df: pd.DataFrame,
+    anomaly_result: dict,
+    max_samples: int | None = None,
+) -> pd.DataFrame:
+    scores = anomaly_result.get("anomaly_scores", [])
+    positions = anomaly_result.get("outlier_positions")
+    labels = anomaly_result.get("outlier_indices", [])
+
+    if positions is not None:
+        rows = df.iloc[list(positions)]
+        row_positions = list(positions)
+        row_labels = labels
+    else:
+        rows = df.loc[list(labels)]
+        row_positions = [df.index.get_loc(label) for label in labels]
+        row_labels = labels
+
+    if max_samples is not None:
+        rows = rows.head(max_samples)
+        row_positions = row_positions[:max_samples]
+        row_labels = row_labels[:max_samples]
+        scores = scores[:max_samples]
+
+    exported = rows.copy()
+    exported["_anomaly_score"] = list(scores)[:len(exported)]
+    exported["_row_index"] = row_labels[:len(exported)]
+    exported["_row_position"] = row_positions[:len(exported)]
+    return exported
 
 
 def _threshold_severity(value: float, thresholds: list, fallback: Severity = Severity.WARN) -> Severity:
@@ -65,6 +113,8 @@ def build_data_quality_findings(
     profile_result: dict,
     anomaly_result: dict,
     mechs: dict | None = None,
+    artifact_dir: str | Path | None = None,
+    artifact_prefix: str | None = None,
 ) -> DataQualityFindings:
     table = profile_result.get("table", {})
 
@@ -85,20 +135,20 @@ def build_data_quality_findings(
     cal_table = load_calibrator_table()
 
     anomalies = []
+    artifact_stem = artifact_prefix or _safe_artifact_stem(file_name)
 
     # Outlier record
     if not anomaly_result.get("skipped", True) and anomaly_result.get("n_outliers", 0) > 0:
-        outlier_indices = anomaly_result["outlier_indices"]
         outlier_scores = anomaly_result["anomaly_scores"]
         n_outliers = anomaly_result["n_outliers"]
 
-        top_k = min(10, n_outliers)
-        top_samples = []
-        for idx, score in zip(outlier_indices[:top_k], outlier_scores[:top_k]):
-            row = df.iloc[idx].to_dict()
-            row["_anomaly_score"] = score
-            row["_row_index"] = int(idx)
-            top_samples.append(row)
+        full_outlier_rows = _outlier_rows(df, anomaly_result)
+        top_samples = _outlier_rows(df, anomaly_result, max_samples=10).to_dict(orient="records")
+        outlier_export = _write_csv_artifact(
+            full_outlier_rows,
+            artifact_dir,
+            f"{artifact_stem}__outlier_rows.csv",
+        )
 
         ratio = n_outliers / meta.n
         outlier_cfg = cal_table.get("outlier_ensemble", {})
@@ -113,12 +163,21 @@ def build_data_quality_findings(
             affected_count=n_outliers,
             affected_percent=round(ratio, 4),
             top_10_samples=top_samples,
+            full_anomalies_export_path=outlier_export,
         ))
 
     # Duplicate record
     if meta.n_duplicates > 0:
-        dup_df = df[df.duplicated(keep=False)]
+        duplicate_positions = np.flatnonzero(df.duplicated(keep=False).to_numpy()).tolist()
+        dup_df = df.iloc[duplicate_positions].copy()
+        dup_df["_row_index"] = df.index[duplicate_positions].tolist()
+        dup_df["_row_position"] = duplicate_positions
         dup_samples = dup_df.head(10).to_dict(orient="records")
+        duplicate_export = _write_csv_artifact(
+            dup_df,
+            artifact_dir,
+            f"{artifact_stem}__duplicate_rows.csv",
+        )
         dup_cfg = cal_table.get("duplicate", {})
         dup_sev = _threshold_severity(meta.p_duplicates, dup_cfg.get("thresholds", []))
         anomalies.append(AnomalyRecord(
@@ -130,6 +189,7 @@ def build_data_quality_findings(
             affected_count=meta.n_duplicates,
             affected_percent=meta.p_duplicates,
             top_10_samples=dup_samples,  # type: ignore[arg-type]
+            full_anomalies_export_path=duplicate_export,
         ))
 
     return DataQualityFindings(

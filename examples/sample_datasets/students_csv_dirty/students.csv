@@ -1,0 +1,7 @@
+student_id,student_name,age,score,email,school_id,enrolled_at,legacy_code
+1,An Nguyen,15,8.5,an@example.com,S01,2025-09-01,L001
+2,Binh Tran,,9.1,binh@example.com,S01,2025-09-02,L002
+2,Chi Le,16,999.0,chi@example.com,S02,2025-09-03,L003
+,Dat Pham,17,-4.0,dat@example.com,S99,not-a-date,L004
+5,,sixteen,7.2,an@example.com,S03,2025-09-05,L005
+6,Giang Vo,18,8.0,giang@example.com,,2025-09-06,L006

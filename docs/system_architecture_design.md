@@ -12,9 +12,9 @@ Khác biệt hoàn toàn với các tool hiện có trên thị trường, hệ 
 - Hệ thống Guardrail (Allowed-Set + Tolerance) sẽ chủ động quét mọi con số và tên cột trong văn bản LLM, đối chiếu với dữ liệu JSON gốc để chặn Hallucination.
 
 ## 2. Quyết định Chiến lược (Strategic Decisions)
-1. **Hỗ trợ Đa luồng ngay từ v1.0:** Hệ thống không chỉ soi lỗi trên 1 bảng (Single-table CSV), mà còn đối chiếu chéo nhiều bảng với nhau dựa trên bản vẽ thiết kế (DBML). Đây là "vũ khí bí mật" giúp dự án vượt trội hơn các open-source hiện tại.
+1. **Hỗ trợ Đa luồng ngay từ v1.0:** Hệ thống không chỉ soi lỗi trên 1 bảng, mà còn đối chiếu chéo nhiều bảng với nhau dựa trên bản vẽ thiết kế (DBML/SQL DDL) hoặc bằng suy luận quan hệ từ dữ liệu khi schema thiếu FK. Đây là "vũ khí bí mật" giúp dự án vượt trội hơn các open-source hiện tại.
 2. **Chiến lược Điều phối Mô hình AI (LLM Model Routing):** Tận dụng hệ sinh thái OpenAI. Dùng model dòng `Mini` (rẻ, nhanh, quỹ 2.5M tokens/ngày) cho các tác vụ vụn vặt. Dùng model `High-tier` (thông minh, quỹ 250k tokens/ngày) cho tác vụ tổng hợp cuối cùng.
-3. **Biểu đồ Kép (Dual Visualization):** Kết hợp giữa Biểu đồ tổng quan (Luôn vẽ) và Biểu đồ chẩn đoán (Chỉ vẽ khi có lỗi, do AI ra lệnh).
+3. **L4 không xử lý Chart:** Biểu đồ là artifact phụ trợ cho end user ở L3.5, không phải input/output của L4. L4 chỉ nhận dữ liệu thuần: JSON findings, raw samples dạng số/chữ, và schema/relationship metadata.
 
 ---
 
@@ -29,15 +29,15 @@ graph TD
 
     %% INPUT
     subgraph L0 ["Layer 0: Data Ingestion (Đầu vào)"]
-        D1["Data Files (CSV/Excel)"]:::input
-        S1["Schema File (DBML)"]:::input
+        D1["Data Files (CSV/Excel/Parquet/JSON)"]:::input
+        S1["Schema File (DBML/SQL DDL)"]:::input
     end
 
     %% ENGINES (L1 & L2)
     subgraph L1_L2 ["Layer 1 & 2: Deterministic & ML Engines (Bộ máy phân tích)"]
         E1["fg-data-profiling (L1)"]:::engine
         E2["PyOD Anomaly (L2)"]:::engine
-        E3["DBML Validator (L2)"]:::engine
+        E3["Schema + Relationship Validator (L2)"]:::engine
     end
 
     D1 --> E1
@@ -59,10 +59,11 @@ graph TD
     SS3 --> SS4
 
     %% ONTOLOGY (L3 & L3.5)
-    subgraph L3 ["Layer 3 & 3.5: Artifacts & Charts (Đóng gói kết quả)"]
+    subgraph L3 ["Layer 3 & optional L3.5: Artifacts (Đóng gói kết quả)"]
         J1["data_quality_findings.json"]:::artifact
         J2["schema_evaluation_findings.json"]:::artifact
         J3["dataset_verdict.json"]:::artifact
+        R0["Raw Top-K Samples (số/chữ)"]:::artifact
         C1["Overview Charts"]:::artifact
         C2["Diagnostic Charts"]:::artifact
     end
@@ -70,12 +71,13 @@ graph TD
     SS3 --> J1
     E3 --> J2
     SS4 --> J3
+    D1 --> R0
     E1 --> C1
+    J1 --> C2
 
     %% LLM REPORTING (L4)
-    subgraph L4 ["Layer 4: LLM Multi-Agent Orchestration (Đội ngũ AI Báo cáo)"]
+    subgraph L4 ["Layer 4: Text-only LLM Reporting (Không Chart/Vision)"]
         R1{"LLM Router"}:::agent
-        CA["Chart Architect Agent"]:::agent
         A1["Mini Agent (Data QA)"]:::agent
         A2["Mini Agent (Architect)"]:::agent
         G1["🛑 Guardrail"]:::engine
@@ -83,21 +85,32 @@ graph TD
         G2["🛑 Guardrail"]:::engine
     end
 
-    J1 & J3 & C1 --> R1
+    J1 & J3 & R0 --> R1
     J2 --> R1
-    
-    R1 --> CA
-    CA -->|"Lệnh vẽ biểu đồ"| C2
-    C2 -->|"Trả ảnh"| A1
-    
-    R1 -->|"JSON + Overview Charts"| A1
-    R1 -->|"JSON DBML"| A2
+
+    R1 -->|"JSON + raw samples only"| A1
+    R1 -->|"schema JSON + relationship metadata"| A2
     
     A1 & A2 --> G1
     G1 -->|"Đã kiểm tra số liệu"| M1
     M1 --> G2
     G2 -->|"Tổng hợp"| OUT["Final EDA Markdown Report"]:::input
+    C1 & C2 --> USER_ARTIFACTS["Optional chart artifacts for end user"]:::input
 ```
+
+---
+
+## 3.1. Input/Output Contract theo từng Layer
+
+| Layer | Input | Output | Ghi chú boundary |
+| :--- | :--- | :--- | :--- |
+| **L0 Ingestion** | File dữ liệu `.csv`, `.xlsx/.xls`, `.parquet`, `.json/.jsonl/.ndjson`; schema `.dbml` hoặc `.sql` tùy chọn | Một hoặc nhiều `pandas.DataFrame`; `UnifiedSchemaResult` gồm `tables`, `refs`, `meta` | Mọi format dữ liệu phải được chuẩn hóa thành DataFrame trước khi vào engine. |
+| **L1 Profiling** | DataFrame từng bảng | `profile_result` dict từ `ydata-profiling/fg-data-profiling`: row/column count, missing, duplicate, type, numeric/categorical stats | CLI mặc định chạy profile đầy đủ hơn; test có thể bật `profiling_minimal=True` để chạy nhanh. |
+| **L2 Anomaly + Schema** | DataFrame; schema result; danh sách bảng nếu multi-table | Outlier indices/scores; integrity errors; explicit/inferred table relationships | Khi thiếu FK hoặc tên cột lệch (`id_school` vs `trường học`), engine phải ghi alias/relationship inference cùng confidence/evidence. |
+| **L2.5 Severity** | Findings thô từ L1/L2 | Severity per finding, `compound_severity`, dataset verdict READY/WARN/NOT_READY | `calibrator_table.json` v0.1 là heuristic, có DAMA mapping nhưng chưa được xem là scientific calibration hoàn chỉnh. |
+| **L3 Ontology** | L1/L2/L2.5 outputs | `data_quality_findings.json`, `schema_evaluation_findings.json`, `dataset_verdict.json` | JSON phải chỉ rõ thiếu bảng/cột nào, alias nào được suy luận, quan hệ nào explicit/inferred, và tình trạng thiếu có chủ động hay không nếu có bằng chứng. |
+| **L3.5 Visualization** | L3 JSON + DataFrame | Chart files tùy chọn cho end user | Không gửi chart vào L4. Chart không được dùng làm nguồn số liệu cho LLM. |
+| **L4 Reporting** | Chỉ JSON + raw top-k samples dạng số/chữ | Markdown narrative đã qua guardrail | Không có Chart Architect, không Vision, không lệnh vẽ biểu đồ. LLM chỉ diễn giải số liệu đã có. |
 
 ---
 
@@ -113,24 +126,26 @@ graph TD
 ### Layer 2: Khám chuyên sâu bằng AI truyền thống & Đối chiếu Lược đồ
 **Nhiệm vụ 1: Tìm rác dữ liệu ở mức độ từng dòng (Anomaly Detection).**
 - **Phạm vi v1:** Chỉ chạy PyOD trên các **cột số (Numeric)**. Các cột phân loại (Categorical) sẽ dựa vào cảnh báo của `fg-data-profiling` ở Layer 1.
-- **Tiền xử lý ẩn (Pre-imputation):** Do các thuật toán PyOD sẽ bị crash (báo lỗi) nếu gặp dữ liệu trống (NaN), hệ thống phải tự động tạo một bản copy của dữ liệu và điền khuyết bằng `Median` trước khi đưa vào PyOD quét. Bản copy này sau đó bị hủy, dữ liệu gốc vẫn giữ nguyên lỗ hổng để báo cáo.
+- **Tiền xử lý ẩn:** Do PyOD không xử lý tốt NaN, hệ thống tạo một bản phân tích tạm chỉ gồm các cột numeric đủ điều kiện và loại các dòng NaN khỏi lượt quét anomaly. Dữ liệu gốc không bị sửa; missingness vẫn được báo cáo riêng ở L1/L2.5.
 - **Hướng nâng cấp v2:** Encode cột Categorical (Label/Target Encoding) rồi ghép vào ma trận số để PyOD quét toàn bộ cả cột chữ lẫn cột số cùng lúc. Phương án này mạnh hơn vì phát hiện được rác đa biến giữa cột số và cột chữ (VD: "Giới tính = Nữ" nhưng "Nghĩa vụ quân sự = Đã hoàn thành"), tuy nhiên cần chọn đúng kỹ thuật Encoding cho từng loại cột để tránh LOF hoạt động sai lệch.
 - **Công nghệ chọn:** `PyOD` với cơ chế **Ensemble (Hội đồng Giám khảo)** kết hợp 3 thuật toán: Isolation Forest, ECOD, và LOF (Local Outlier Factor).
 - **Tại sao chọn 3 thuật toán?** Theo định lý "No Free Lunch", không có thuật toán nào đúng cho mọi loại data. Ta kết hợp cả 3:
   - *IForest:* Bắt rác tổng thể (Global anomalies).
   - *LOF:* Bắt rác cục bộ (Ví dụ: Lương 50 triệu là bình thường ở cty, nhưng là rác nếu nằm trong tệp Sinh viên thực tập).
   - *ECOD:* Chạy siêu tốc và trị được dữ liệu phân phối méo mó.
-- **Cách kết hợp (Average Score + Threshold):** Hệ thống dùng `pyod.models.combination.average()` để lấy điểm trung bình của 3 thuật toán. Dòng nào có điểm trung bình vượt ngưỡng (threshold) sẽ bị đánh dấu là rác. Cách này được khuyến nghị bởi benchmark ADBench (NeurIPS 2022) vì linh hoạt và chính xác hơn so với hard voting.
+- **Cách kết hợp (Max Z-score + Threshold):** Hệ thống chuẩn hóa score từng thuật toán về z-score rồi lấy tín hiệu mạnh nhất. Cách này tránh làm loãng anomaly khi một thuật toán yếu hơn hoặc trả score lệch dấu trên dataset nhỏ.
 - **Tính năng Data Export:** Tự động xuất (dump) toàn bộ 100% các dòng dữ liệu dị biệt ra file CSV riêng biệt đính kèm báo cáo để Data Engineer xử lý.
 
 **Nhiệm vụ 2: Kiểm tra chéo giữa các bảng (Multi-table DBML).**
-- **Công nghệ chọn:** Thư viện `pydbml` kết hợp code tự viết bằng `Pandas`.
-- **Tại sao chọn?** Trên thế giới gần như chưa có Tool Open-Source nào xử lý được bài toán này. Ta dùng `pydbml` để đọc file thiết kế, hiểu được khóa ngoại (Foreign Key) nối từ bảng A sang bảng B. Sau đó dùng `Pandas` quét file CSV để kiểm tra xem có dòng dữ liệu nào bị "mồ côi" không. 
+- **Công nghệ chọn:** `pydbml`, `simple-ddl-parser`, và code tự viết bằng `Pandas`.
+- **Tại sao chọn?** Trên thế giới gần như chưa có Tool Open-Source nào xử lý tốt bài toán này. Ta đọc DBML/SQL DDL để hiểu khóa ngoại (Foreign Key) nối từ bảng A sang bảng B, sau đó dùng `Pandas` kiểm tra dữ liệu bị "mồ côi".
+- **Khi schema thiếu FK:** Engine sẽ suy luận quan hệ 2 bảng bằng tên cột, tên bảng và độ phủ giá trị. Ví dụ nếu `students.id_school` có 100% giá trị nằm trong `schools.id` nhưng DBML chưa có `Ref`, JSON sẽ ghi `inferred_fk` với `status="missing_from_schema"`, `confidence`, và `evidence`.
+- **Khi tên cột khác nhau nhưng cùng nghĩa:** Engine không được coi cứng là thiếu cột ngay. Ví dụ `id_school` và `trường học` được kiểm tra bằng normalization/alias heuristic; nếu đủ rõ, JSON ghi `COLUMN_ALIAS_INFERRED` kèm `candidate_aliases` để LLM/end user hiểu đây là một trường tương đương cần xác nhận.
 
 ### Layer 2.5: Severity Stack (Đánh giá mức độ nghiêm trọng)
 **Nhiệm vụ:** Nhận kết quả thô từ L1 & L2, phân tích sâu hơn và gán mức độ nghiêm trọng trước khi đóng gói JSON.
 - **Module (a) MCAR/MAR/MNAR Detector (~50 dòng):** Phân loại lý do thiếu dữ liệu (ngẫu nhiên / có hệ thống / tự thân). Dùng Little's test (`scipy`) + Logistic Regression. **Constraint Hiệu năng:** Do tính toán ma trận phức tạp, nếu dataset vượt quá 10.000 dòng, hệ thống bắt buộc lấy mẫu ngẫu nhiên (Random Stratified Sampling) xuống 10.000 dòng trước khi chạy để đảm bảo tốc độ phản hồi.
-- **Module (b) Calibrator (~20 dòng runtime):** Tra bảng `calibrator_table.json` để gán severity. v0.1 dùng bảng đặt tay (Heuristics), sau này có thể thay bằng bảng từ benchmark OpenML mà không đổi code.
+- **Module (b) Calibrator (~20 dòng runtime):** Tra bảng `calibrator_table.json` để gán severity. v0.1 dùng bảng đặt tay (Heuristics) và gắn nhãn DAMA; chưa được coi là căn cứ khoa học hoàn chỉnh. Trước production cần benchmark/calibration bằng dataset có nhãn hoặc tiêu chí business-risk rõ ràng.
 - **Module (c) Aggregator (~30-50 dòng):** Tổng hợp lỗi toàn dataset → ra phán quyết READY / WARN / NOT_READY. Xuất `dataset_verdict.json`.
 - **Module (d) CompoundEscalator (~15 dòng):** Nếu 1 cột dính nhiều lỗi → nâng `compound_severity` lên. Logic: `max(severity) + 1 bậc / lỗi thêm`, cap ở CRITICAL.
 
@@ -138,21 +153,23 @@ graph TD
 **Nhiệm vụ:** Gom hết kết quả của L1, L2 và L2.5 lại thành ngôn ngữ chuẩn mực để đưa cho LLM đọc.
 - **Quyết định 1: Tách 3 file JSON.** `data_quality_findings.json` (báo cáo rác), `schema_evaluation_findings.json` (báo cáo thiết kế), `dataset_verdict.json` (phán quyết tổng). *Lý do:* Tránh làm LLM bị "ngợp" (vượt quá Context Window).
 - **Quyết định 2: Chuẩn hóa theo DAMA-DMBOK (C1).** Mọi lỗi đều được gán `dq_dimensions` chuẩn quốc tế (Completeness, Validity, Consistency, Timeliness, Uniqueness, Accuracy), kèm `ml_impact` và `compound_severity`.
+- **Quyết định 3: Context cho thiếu bảng/cột.** `IntegrityError` có thể chứa `missing_field_context` để ghi rõ `expected_column`, `candidate_aliases`, `table_context`, `inferred_meaning`, và `is_intentional_missing`. Nếu hệ thống không có bằng chứng việc thiếu là chủ động, trường này phải là `null/unknown`, không đoán bừa.
+- **Quyết định 4: Quan hệ bảng là first-class JSON.** `schema_evaluation_findings.json` có `relationships[]` để phân biệt `explicit_fk` và `inferred_fk`; mỗi quan hệ có `status`, `confidence`, và `evidence`.
 
 ### Layer 3.5: Hệ thống Biểu đồ Kép (Dual Visualization Engine)
 **Nhiệm vụ:** Sinh biểu đồ minh họa.
-- **Overview Charts (Trích xuất từ ydata):** Không "phát minh lại cái bánh xe" bằng cách tự code vẽ. Ta sẽ làm thao tác **Trích xuất (Extract)** các biểu đồ tuyệt đẹp đã được vẽ sẵn nằm trong bụng output của `ydata-profiling` để dùng luôn.
-- **Diagnostic Charts (LLM-Directed):** Ở Layer 4, nếu con LLM thấy cột "Tuổi" có rác quá nặng, nó sẽ trả về lệnh JSON yêu cầu: "Vẽ ngay cho tao cái scatter plot của cột Tuổi". Code ở Layer 3.5 sẽ nhận lệnh, dùng Python tự vẽ biểu đồ, trong đó bôi đỏ toàn bộ 100% các điểm rác đè lên dữ liệu thường để minh họa. Sau đó gửi link ảnh lại cho LLM.
+- **Overview Charts:** Có thể trích xuất từ ydata hoặc tự vẽ ở Python để phục vụ người xem báo cáo.
+- **Diagnostic Charts:** Nếu cần, Python vẽ biểu đồ chẩn đoán từ findings đã có. Chart là artifact phụ trợ cho end user, không phải input cho L4 và không được dùng làm bằng chứng số liệu cho LLM.
 
 ### Layer 4: Đội ngũ Báo cáo AI (Multi-Agent Orchestration)
 **Nhiệm vụ:** Viết báo cáo Markdown hoàn chỉnh, sinh động, dễ hiểu.
+- **Boundary bắt buộc:** L4 không có Chart Architect, không Vision, không trả lệnh vẽ biểu đồ. Input của L4 chỉ gồm JSON findings và raw top-k samples dạng số/chữ. Output của L4 là text/Markdown.
 - **Tại sao dùng Multi-Agent?** Nếu ném 1 cục JSON khổng lồ cho LLM và bảo "Viết báo cáo đi", nó sẽ viết rất chung chung. Ta chia nhỏ ra theo cơ chế **Smart Routing & Batching**:
   - **Lọc bệnh (Severity Filtering):** Bỏ qua các lỗi nhẹ (INFO), chỉ gọi Mini Agent xử lý những lỗi từ WARN trở lên.
   - **Gộp nhóm (Issue-based Batching):** Gom theo nhóm lỗi (VD: 1 Agent chuyên lo giải quyết 5 cột bị lỗi Outlier) thay vì gọi từng Agent cho từng cột.
   - **Cắt ngọn (Top N Limit):** Tối đa chỉ cấp quyền cho AI phân tích sâu Top 5 cụm lỗi nghiêm trọng nhất. Các lỗi còn lại sẽ được Python tự động render thành bảng (Table) ở phần Phụ lục (Appendix) mà không tốn API call.
   
   **Các vai trò cụ thể:**
-  - **"Đạo diễn Hình ảnh" (Chart Architect Agent):** Đọc JSON nén, quyết định cần vẽ biểu đồ chẩn đoán nào, trả về lệnh JSON cho Python vẽ.
   - **Nhóm "Thợ" (Micro-Agents):** Dùng các model nhỏ (`gpt-4o-mini`). Mỗi thợ nhận 1 mảnh JSON đã được thái nhỏ theo cơ chế Batching ở trên và viết đoạn phân tích chi tiết.
   - **"Tổng biên tập" (Master Agent):** Dùng model xịn (`gpt-4o` hoặc `o1`). Đọc các mảnh ghép từ nhóm thợ, viết Executive Summary và Kết luận (Verdict).
 - **Guardrail chống Hallucination (C3 — Allowed-Set + Tolerance + Column-Name Check):**
@@ -161,8 +178,7 @@ graph TD
   - Regex quét mọi số trong văn bản LLM → đối chiếu Allowed-Set với tolerance (integer: chính xác, decimal: ±0.0001, relative: ±0.1%).
   - Quét tên cột: Nếu LLM nhắc đến cột không tồn tại → Hallucination.
   - Vi phạm → Retry tối đa 3 lần. Nếu vẫn sai → thay bằng `<SỐ LIỆU CHƯA XÁC MINH>`.
-- **⚠️ Chart-Data Pairing (Ghép đúng biểu đồ với đúng Agent):**
-  Khi Python Dispatcher chia JSON thành mảnh nhỏ gửi cho từng Mini Agent, đường dẫn biểu đồ chẩn đoán **đã nằm sẵn** trong mảnh JSON đó thông qua trường `diagnostic_chart`. Ví dụ: Mini Agent nhận mảnh JSON chứa lỗi Outlier ở cột "Age" sẽ thấy `"diagnostic_chart": "output/charts/age_fare_scatter.png"` ngay trong dữ liệu. Python Dispatcher **PHẢI** đọc trường này để đính kèm đúng file ảnh vào API call (Vision) của Mini Agent tương ứng. Không được gửi tất cả ảnh cho tất cả Agent — mỗi Agent chỉ nhận ảnh liên quan đến mảnh JSON của nó.
+- **Fallback hiện tại:** Khi L4 chưa triển khai, hệ thống vẫn xuất `summary_report.md` deterministic để end user đọc được verdict, lỗi chính, schema findings và quan hệ bảng mà không cần xem raw JSON.
 
 ---
 
@@ -171,10 +187,10 @@ graph TD
 Để hiện thực hóa kiến trúc trên, dự án sẽ được code theo 4 giai đoạn:
 
 ### Phase 1: Xây dựng Bộ máy Cốt lõi (Core Engines - L1 & L2)
-- `[ ]` Viết module `ingestion`: Code đọc file CSV, Excel và parse file `.dbml`.
+- `[ ]` Viết module `ingestion`: Code đọc file CSV, Excel, Parquet, JSON/JSONL và parse schema `.dbml/.sql`.
 - `[ ]` Viết module `profiling_engine`: Tích hợp `ydata-profiling`.
 - `[ ]` Viết module `anomaly_engine`: Tích hợp `PyOD` (Isolation Forest + ECOD + LOF Ensemble).
-- `[ ]` Viết module `schema_engine`: Logic kiểm tra Khóa ngoại (Foreign Key) giữa các DataFrames.
+- `[ ]` Viết module `schema_engine`: Logic kiểm tra Khóa ngoại (Foreign Key), missing table/column, alias cột và quan hệ bảng inferred giữa các DataFrames.
 
 ### Phase 2: Chuẩn hóa Đầu ra + Severity Stack (L2.5 & L3)
 - `[ ]` Định nghĩa Pydantic models với C1 fields (`dq_dimensions`, `ml_impact`, `compound_severity`, `confidence`) cho 3 file JSON.
@@ -185,12 +201,12 @@ graph TD
 - `[ ]` Viết module `findings_builder.py`: Gom L1 + L2 + L2.5 → xuất 3 file JSON chuẩn.
 
 ### Phase 3: Biểu đồ (Visualization - L3.5)
-- `[ ]` Viết module `visualizer`: Hàm vẽ Overview Charts (trích xuất từ ydata).
-- `[ ]` Viết logic Chart Architect: Parse lệnh vẽ biểu đồ chẩn đoán từ Agent.
+- `[ ]` Viết module `visualizer`: Hàm vẽ/trích xuất chart phục vụ end user.
+- `[ ]` Đảm bảo chart không đi vào L4 và không được LLM dùng làm nguồn số liệu.
 
 ### Phase 4: Xây dựng Đội ngũ AI + Guardrail (L4)
 - `[ ]` Viết module `guardrail/validator.py`: Allowed-Set builder, Regex extractor, tolerance matcher, column-name checker.
-- `[ ]` Viết Prompt cho **Chart Architect Agent**, **Mini Agent (Data QA)**, **Mini Agent (Architect)**.
+- `[ ]` Viết Prompt cho **Mini Agent (Data QA)** và **Mini Agent (Architect)** theo text-only contract.
 - `[ ]` Viết Prompt cho **Master Agent** để tổng hợp ra file Markdown cuối cùng.
 - `[ ]` Tích hợp Guardrail vào sau mỗi Agent call (Mini + Master).
 
@@ -207,12 +223,14 @@ graph TD
 src/
 ├── ingestion/               # Các Plugin đọc dữ liệu (Output luôn là Pandas DataFrame)
 │   ├── csv_reader.py
-│   ├── excel_reader.py
-│   └── dbml_parser.py       # Dùng pydbml
+│   ├── readers.py           # CSV/Excel/Parquet/JSON readers
+│   ├── registry.py          # load_any() auto-detect data format
+│   └── schema_reader.py     # DBML/SQL DDL parser adapters
 ├── engines/                 # Core logic xử lý (L1 & L2)
 │   ├── profiling_engine.py  # Wrap ydata-profiling (Layer 1)
 │   ├── anomaly_engine.py    # Wrap PyOD (Layer 2)
-│   └── schema_engine.py     # Đối chiếu DataFrame vs DBML (Layer 2)
+│   ├── schema_engine.py     # Schema validation + relationship inference
+│   └── visualizer.py        # Chart artifact cho end user, không thuộc L4
 ├── severity/                # Layer 2.5: Severity Stack (C2)
 │   ├── calibrator.py        # Tra bảng calibrator_table.json
 │   ├── missingness.py       # MCAR/MAR/MNAR detector
@@ -227,15 +245,15 @@ src/
 │   ├── validator.py         # Allowed-Set builder + Regex + tolerance matcher
 │   ├── column_checker.py    # Column-name hallucination check
 │   └── policy.py            # Retry policy, tolerance config
-└── reporting/               # Lớp LLM (Layer 4)
-    ├── visualizer.py        # Vẽ biểu đồ (Overview & Diagnostic)
-    ├── prompts/             # Template cho các AI Agents
-    └── agents/              # Chart Architect, Mini Agents, Master Agent
+└── reporting/               # Báo cáo text
+    ├── summary_renderer.py  # Markdown deterministic fallback cho end user
+    ├── prompts/             # Template cho L4 text-only Agents
+    └── agents/              # Mini Agents, Master Agent
 ```
 
 ## 7. Kế hoạch Kiểm thử (Verification Plan)
 - **Automated Tests:** Tạo thư mục `tests/` chứa các bộ dataset mẫu (1 sạch, 1 lỗi, 1 sai DBML). Viết unit tests để đảm bảo `anomaly_engine` bắt được dòng rác, và `schema_engine` bắt được lỗi mồ côi.
-- **Manual Verification:** Build end-to-end pipeline chạy trên 1 terminal duy nhất. Output cuối cùng phải sinh ra 1 file Markdown có chèn ảnh biểu đồ đầy đủ, kèm nhận xét chuyên sâu từ LLM.
+- **Manual Verification:** Build end-to-end pipeline chạy trên 1 terminal duy nhất. Output cuối cùng phải sinh ra 3 JSON chuẩn và `summary_report.md`; chart nếu có là artifact phụ trợ riêng, không phải phần bắt buộc của L4.
 
 ---
 
@@ -252,7 +270,7 @@ src/
 - **Vấn đề:** OpenAI API có thể bị quá tải, timeout, hoặc model trả về định dạng rác (không tuân thủ cú pháp Markdown mong muốn).
 - **Giải pháp:** 
   - Cơ chế Retry: Tự động gọi lại API tối đa 3 lần nếu có lỗi mạng.
-  - Graceful Degradation (Suy thoái an toàn): Nếu sau 3 lần vẫn lỗi, hệ thống KHÔNG crash. Nó sẽ fallback về "Chế độ Cơ bản" -> Trả ra báo cáo Markdown chỉ chứa biểu đồ và dữ liệu thống kê từ Layer 1 & 2, tự động ẩn phần nhận xét của AI đi.
+  - Graceful Degradation (Suy thoái an toàn): Nếu sau 3 lần vẫn lỗi, hệ thống KHÔNG crash. Nó sẽ fallback về "Chế độ Cơ bản" -> Trả ra báo cáo Markdown deterministic từ JSON và raw top-k samples, tự động ẩn phần nhận xét của AI đi.
 
 ### 8.3. Ontology Contract (Đặc tả API)
 - Để đảm bảo nhóm Mini Agents không bị loạn, cấu trúc JSON giữa L2 và L3 sẽ được quản lý khắt khe bằng Pydantic. Mọi chi tiết về Schema sẽ không nằm trong tài liệu này mà được đặc tả riêng tại `docs/schema_definitions.md` (Sẽ triển khai ở Phase 2).

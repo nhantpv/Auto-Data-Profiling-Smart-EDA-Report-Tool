@@ -1,0 +1,34 @@
+{
+  "schema_version": "schema_relationship_eval_v1",
+  "cases": [
+    {
+      "id": "school_multi_infer_schema",
+      "data_files": [
+        "examples/sample_datasets/school_multi_relations/schools.csv",
+        "examples/sample_datasets/school_multi_relations/classes.csv",
+        "examples/sample_datasets/school_multi_relations/students.csv"
+      ],
+      "schema_file": null,
+      "expected_relationships": [
+        {
+          "child_table": "classes",
+          "child_column": "school_id",
+          "parent_table": "schools",
+          "parent_column": "id_school"
+        },
+        {
+          "child_table": "students",
+          "child_column": "truong_hoc",
+          "parent_table": "schools",
+          "parent_column": "id_school"
+        },
+        {
+          "child_table": "students",
+          "child_column": "class_id",
+          "parent_table": "classes",
+          "parent_column": "class_id"
+        }
+      ]
+    }
+  ]
+}

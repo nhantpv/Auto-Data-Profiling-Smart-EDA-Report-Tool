@@ -90,6 +90,26 @@ class TableInfo(BaseModel):
     columns: List[str]
 
 
+class MissingFieldContext(BaseModel):
+    expected_column: str
+    table_context: Optional[str] = None
+    inferred_meaning: Optional[str] = None
+    is_intentional_missing: Optional[bool] = None
+    intentional_missing_basis: str = "unknown"
+    candidate_aliases: List[str] = Field(default_factory=list)
+
+
+class RelationshipInfo(BaseModel):
+    child_table: str
+    child_column: str
+    parent_table: str
+    parent_column: str
+    relationship_type: str
+    status: str
+    confidence: float
+    evidence: List[str] = Field(default_factory=list)
+
+
 class IntegrityError(BaseModel):
     error_type: str
     description: str
@@ -102,9 +122,12 @@ class IntegrityError(BaseModel):
     compound_severity: Optional[Severity] = None
     confidence: Optional[float] = None
     top_10_samples: List[Dict[str, Any]] = Field(default_factory=list)
+    missing_field_context: Optional[MissingFieldContext] = None
+    relationship: Optional[RelationshipInfo] = None
 
 
 class SchemaEvaluationFindings(BaseModel):
     schema_meta: SchemaMeta
     tables: List[TableInfo]
     integrity_errors: List[IntegrityError] = Field(default_factory=list)
+    relationships: List[RelationshipInfo] = Field(default_factory=list)

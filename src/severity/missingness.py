@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 _MAR_AUC_GATE = 0.65   # logistic CV-AUC above which we label a column MAR
 _MCAR_ALPHA   = 0.05   # significance level for Little's MCAR test
+_MAX_MISSINGNESS_ROWS = 10_000
+_SAMPLE_RANDOM_STATE = 42
 
 
 # ── Little's MCAR test ────────────────────────────────────────────────────────
@@ -102,7 +104,32 @@ def classify_missingness(
 
 # ── Dataset-level entry point ─────────────────────────────────────────────────
 
-def detect_missingness(df: pd.DataFrame) -> dict:
+def sample_missingness_frame(
+    df: pd.DataFrame,
+    max_rows: int = _MAX_MISSINGNESS_ROWS,
+    random_state: int = _SAMPLE_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Cap missingness diagnostics to max_rows while preserving missing rows.
+
+    Large datasets can make Little's MCAR test and logistic CV expensive. We keep
+    all rows with any missing value when they fit the cap, then fill the
+    remaining budget with a deterministic sample of complete rows.
+    """
+    if len(df) <= max_rows:
+        return df
+
+    missing_mask = df.isna().any(axis=1)
+    missing_rows = df.loc[missing_mask]
+    if len(missing_rows) >= max_rows:
+        return missing_rows.sample(n=max_rows, random_state=random_state).sort_index()
+
+    complete_rows = df.loc[~missing_mask]
+    remaining = max_rows - len(missing_rows)
+    sampled_complete = complete_rows.sample(n=remaining, random_state=random_state)
+    return pd.concat([missing_rows, sampled_complete]).sort_index()
+
+
+def detect_missingness(df: pd.DataFrame, max_rows: int = _MAX_MISSINGNESS_ROWS) -> dict:
     """Run one Little's test (dataset-level) then per-column MAR AUC.
 
     Returns {col_name: mechanism} only for columns that have missing values.
@@ -112,13 +139,14 @@ def detect_missingness(df: pd.DataFrame) -> dict:
     if not missing_cols:
         return {}
 
-    numeric_df = df.select_dtypes(include="number")
+    sampled_df = sample_missingness_frame(df, max_rows=max_rows)
+    numeric_df = sampled_df.select_dtypes(include="number")
     mcar_p = little_mcar_pvalue(numeric_df)
 
     result = {}
     for col in missing_cols:
-        n_missing = int(df[col].isna().sum())
-        auc = mar_auc(df, col) if col in numeric_df.columns else None
+        n_missing = int(sampled_df[col].isna().sum()) if col in sampled_df.columns else 0
+        auc = mar_auc(sampled_df, col) if col in numeric_df.columns else None
         mech = classify_missingness(n_missing, mcar_p, auc)
         result[col] = mech
     return result

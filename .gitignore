@@ -3,3 +3,5 @@ demo_ydata
 output*
 __pycache__/
 *.pyc
+.DS_Store
+runtime/

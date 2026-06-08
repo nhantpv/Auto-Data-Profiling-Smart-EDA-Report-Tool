@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Smart EDA Local</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local production</p>
+          <h1>Smart EDA Runner</h1>
+        </div>
+        <div class="status-pill" id="serviceStatus">Checking</div>
+      </header>
+
+      <main class="workspace">
+        <section class="control-panel" aria-label="Pipeline controls">
+          <div class="tabs" role="tablist" aria-label="Run mode">
+            <button class="tab active" type="button" data-mode="single" role="tab" aria-selected="true">Single table</button>
+            <button class="tab" type="button" data-mode="multi" role="tab" aria-selected="false">Multi table</button>
+          </div>
+
+          <section class="sample-section" aria-label="Sample datasets">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">Samples</p>
+                <h2>Dirty data sets</h2>
+              </div>
+            </div>
+            <div class="sample-list loading" id="sampleList">Loading samples</div>
+          </section>
+
+          <div class="control-divider"></div>
+
+          <form id="singleForm" class="run-form">
+            <label class="field">
+              <span>Data file</span>
+              <input name="data_file" type="file" required accept=".csv,.xlsx,.xls,.parquet,.json,.jsonl,.ndjson" />
+            </label>
+            <label class="field">
+              <span>Schema file</span>
+              <input name="schema_file" type="file" accept=".dbml,.sql" />
+            </label>
+            <label class="switch-row">
+              <input name="profiling_minimal" type="checkbox" />
+              <span>Quick profiling</span>
+            </label>
+            <button class="primary-action" type="submit">
+              <span class="action-symbol">&gt;</span>
+              Run single pipeline
+            </button>
+          </form>
+
+          <form id="multiForm" class="run-form hidden">
+            <label class="field">
+              <span>Data files</span>
+              <input name="data_files" type="file" required multiple accept=".csv,.xlsx,.xls,.parquet,.json,.jsonl,.ndjson" />
+            </label>
+            <label class="field">
+              <span>Schema file</span>
+              <input name="schema_file" type="file" accept=".dbml,.sql" />
+            </label>
+            <button class="primary-action" type="submit">
+              <span class="action-symbol">&gt;</span>
+              Run multi-table pipeline
+            </button>
+          </form>
+        </section>
+
+        <section class="result-panel" aria-live="polite">
+          <div class="result-header">
+            <div>
+              <p class="eyebrow">Result</p>
+              <h2 id="resultTitle">No run yet</h2>
+            </div>
+            <div class="result-actions">
+              <button class="secondary-action" id="cancelJob" type="button" disabled>Cancel</button>
+              <button class="secondary-action" id="retryJob" type="button" disabled>Retry</button>
+              <div class="run-state idle" id="runState">Idle</div>
+            </div>
+          </div>
+
+          <div class="metrics-grid">
+            <div class="metric-tile">
+              <span>Verdict</span>
+              <strong id="metricVerdict">-</strong>
+            </div>
+            <div class="metric-tile">
+              <span>Rows</span>
+              <strong id="metricRows">-</strong>
+            </div>
+            <div class="metric-tile">
+              <span>Issues</span>
+              <strong id="metricIssues">-</strong>
+            </div>
+          </div>
+
+          <div class="output-block">
+            <h3>Files</h3>
+            <div class="file-list empty" id="fileList">No output files</div>
+          </div>
+
+          <div class="output-block report-block">
+            <h3>Summary report</h3>
+            <pre id="reportPreview">Run a pipeline to generate a report.</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

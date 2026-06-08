@@ -157,8 +157,8 @@ class TestSchemaIntegration:
         verdict = aggregate(findings.dataset_meta, all_dq, integrity_errors=schema.integrity_errors)
         assert verdict.verdict == Verdict.READY
 
-    def test_no_schema_produces_two_files_unchanged(self, realistic_outliers_path, tmp_path):
-        """Without schema the pipeline must still produce exactly 2 files and not crash."""
+    def test_no_schema_produces_core_files_and_report(self, realistic_outliers_path, tmp_path):
+        """Without schema the pipeline must still produce core files and not crash."""
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         import importlib
@@ -166,10 +166,34 @@ class TestSchemaIntegration:
         import run_pipeline
         importlib.reload(run_pipeline)
 
-        result = run_pipeline.run(realistic_outliers_path, str(tmp_path), schema_path=None)
+        result = run_pipeline.run(realistic_outliers_path, str(tmp_path), schema_path=None, profiling_minimal=True)
         assert Path(result["dq_path"]).exists()
         assert Path(result["verdict_path"]).exists()
+        assert Path(result["report_path"]).exists()
+        assert Path(result["l4_report_path"]).exists()
+        assert Path(result["guardrail_path"]).exists()
         assert "schema_path" not in result
+
+    def test_pipeline_accepts_excel_input(self, clean_csv_path, tmp_path):
+        import sys
+        sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+        import importlib
+        # pyrefly: ignore [missing-import]
+        import run_pipeline
+        importlib.reload(run_pipeline)
+
+        df = load_csv(clean_csv_path)
+        xlsx_path = tmp_path / "clean.xlsx"
+        df.to_excel(xlsx_path, index=False)
+
+        result = run_pipeline.run(str(xlsx_path), str(tmp_path / "out"), profiling_minimal=True)
+        assert Path(result["dq_path"]).exists()
+        assert Path(result["verdict_path"]).exists()
+        assert Path(result["l4_report_path"]).exists()
+        assert Path(result["guardrail_path"]).exists()
+        report = Path(result["report_path"])
+        assert report.exists()
+        assert "Smart EDA Summary Report" in report.read_text(encoding="utf-8")
 
 
 class TestMultiTableIntegration:
@@ -220,7 +244,7 @@ class TestMultiTableIntegration:
         assert "users" in table_names
         assert "orders" in table_names
 
-    def test_pipeline_multi_csv_produces_three_files(self, tmp_path):
+    def test_pipeline_multi_csv_profiles_each_table(self, tmp_path):
         import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
         import importlib
@@ -232,9 +256,19 @@ class TestMultiTableIntegration:
         schema = str(self.MULTI / "shop.dbml")
         result = run_pipeline.run_multi(csvs, str(tmp_path), schema)
 
+        assert Path(result["dq_path"]).exists()
         assert Path(result["schema_path"]).exists()
         assert Path(result["verdict_path"]).exists()
+        assert Path(result["report_path"]).exists()
+        assert Path(result["l4_report_path"]).exists()
+        assert Path(result["guardrail_path"]).exists()
 
         import json
+        dq = json.loads(Path(result["dq_path"]).read_text())
+        assert dq["schema_version"] == "multi_table_data_quality_v1"
+        assert set(dq["tables"]) == {"users", "orders"}
+        assert dq["tables"]["users"]["findings"]["dataset_meta"]["n"] == 3
+        assert dq["tables"]["orders"]["findings"]["dataset_meta"]["n"] == 4
         v = json.loads(Path(result["verdict_path"]).read_text())
         assert v["verdict"] == "NOT_READY"
+        assert v["summary"]["total_issues"] >= 1

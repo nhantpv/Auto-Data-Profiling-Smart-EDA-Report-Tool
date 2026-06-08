@@ -163,7 +163,7 @@ Kiến trúc Multi-Agent hiện tại **không bị thay đổi**. Guardrail ch�
 ### Lưu ý quan trọng
 
 - **Không phải "1 lần gọi API duy nhất":** Hệ thống Multi-Agent có nhiều lần gọi (N Mini + 1 Master + retry nếu có). Guardrail không giảm số lần gọi — nó chỉ đảm bảo chất lượng đầu ra sau mỗi lần gọi.
-- **Không phải "chính xác 100% tuyệt đối":** Guardrail phủ được **mọi con số** và **tên cột**. Tuy nhiên, những nhận xét văn xuôi không chứa số (VD: LLM bịa *"Dữ liệu có xu hướng tăng mạnh"* trong khi thực tế không hề), hoặc claim dựa trên nhìn ảnh/chart, thì Guardrail không bắt được. Phát biểu chính xác: *"Phủ hallucination cho mọi số liệu và tên cột; kill criterion nếu hallucination rate > 2% trên eval suite 50-finding"*.
+- **Không phải "chính xác 100% tuyệt đối":** Guardrail phủ được **mọi con số** và **tên cột**. Tuy nhiên, những nhận xét văn xuôi không chứa số hoặc không có trace về field/finding gốc (VD: LLM bịa *"Dữ liệu có xu hướng tăng mạnh"* trong khi JSON không có bằng chứng) thì Guardrail số học không bắt đủ. Phát biểu chính xác: *"Phủ hallucination cho mọi số liệu và tên cột; kill criterion nếu hallucination rate > 2% trên eval suite 50-finding"*.
 
 ---
 
@@ -174,4 +174,3 @@ Kiến trúc Multi-Agent hiện tại **không bị thay đổi**. Guardrail ch�
 | **C1** (Làm giàu L3) | ✅ Chấp nhận | Chi phí thấp, giá trị cao, đạt chuẩn DAMA |
 | **C2** (Severity Stack) | ✅ Chấp nhận toàn bộ 4 module | Không overengineer (~150 dòng runtime). Phần benchmark nặng là tùy chọn, có cơ chế fallback về bảng đặt tay |
 | **C3** (Guardrail) | ✅ Chấp nhận (Allowed-Set + Tolerance + Column-Name Check) | Quét chủ động mọi số và tên cột bằng Python thuần, không phụ thuộc sự tuân thủ của LLM, không phá kiến trúc Multi-Agent |
-

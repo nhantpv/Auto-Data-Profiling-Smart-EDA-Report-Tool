@@ -192,8 +192,8 @@
       <div class="step"><div class="lab">L4 · NARRATIVE</div><div class="ti">AI viết báo cáo</div><div class="io">Multi-agent + <b>guardrail chống bịa số</b> → Markdown</div></div>
     </div>
     <div class="grid g2" style="margin-top:22px">
-      <div class="card tight"><h3>Song song hóa L3.5</h3><p><b>Overview charts</b> trích thẳng từ output ydata. <b>Diagnostic charts</b>: ở L4, agent ra lệnh JSON “vẽ scatter cột Tuổi”, Python vẽ &amp; bôi đỏ 100% điểm rác.</p></div>
-      <div class="card tight"><h3>An toàn khi AI hỏng</h3><p>OpenAI timeout/lỗi → retry 3× → <b>graceful degradation</b>: vẫn xuất báo cáo chỉ-biểu-đồ-và-thống-kê, ẩn phần văn AI. Không bao giờ crash.</p></div>
+      <div class="card tight"><h3>Song song hóa L3.5</h3><p><b>Overview/diagnostic charts</b> là artifact phụ trợ cho end user. L4 không nhận chart, không Vision, không ra lệnh vẽ biểu đồ.</p></div>
+      <div class="card tight"><h3>An toàn khi AI hỏng</h3><p>OpenAI timeout/lỗi → retry 3× → <b>graceful degradation</b>: vẫn xuất báo cáo Markdown deterministic từ JSON/verdict. Không bao giờ crash.</p></div>
     </div>
   </section>
 
@@ -203,14 +203,14 @@
     <h2>Hợp đồng vào–ra rõ ràng giữa các tầng.</h2>
     <table>
       <tr><th>Tầng</th><th>Công nghệ</th><th>Input</th><th>Output</th></tr>
-      <tr><td><b class="ok">L0</b> Ingestion</td><td>pandas, pydbml</td><td>file CSV/Excel, file <code>.dbml</code></td><td><b>DataFrame(s)</b> + schema đã parse (mã hóa utf-8→utf-8-sig fallback)</td></tr>
-      <tr><td><b class="ok">L1</b> Profiling</td><td>ydata-profiling (<code>minimal=True</code>)</td><td>DataFrame</td><td><code>DatasetMeta</code> + <code>ColumnStats</code>: n, n_var, p_cells_missing, n_duplicates, type, n_missing, n_zeros/n_distinct</td></tr>
-      <tr><td><b class="ok">L2</b> Anomaly</td><td>PyOD: IForest+ECOD+LOF, <code>average()</code></td><td>DataFrame (chỉ cột số)</td><td>điểm bất thường chuẩn hóa [0,1] + ngưỡng percentile → danh sách dòng rác</td></tr>
-      <tr><td><b class="ok">L2</b> Schema</td><td>pydbml + Pandas</td><td>DataFrame + DBML</td><td><code>IntegrityError[]</code>: <code>ORPHAN_FOREIGN_KEY</code>, affected_table, top-10 mẫu</td></tr>
+      <tr><td><b class="ok">L0</b> Ingestion</td><td>pandas, pydbml, SQL DDL parser</td><td>CSV/Excel/Parquet/JSON, <code>.dbml/.sql</code></td><td><b>DataFrame(s)</b> + schema đã parse</td></tr>
+      <tr><td><b class="ok">L1</b> Profiling</td><td>ydata-profiling</td><td>DataFrame</td><td><code>DatasetMeta</code> + <code>ColumnStats</code>: n, n_var, p_cells_missing, n_duplicates, type, metrics</td></tr>
+      <tr><td><b class="ok">L2</b> Anomaly</td><td>PyOD: IForest+ECOD+LOF</td><td>DataFrame (chỉ cột số)</td><td>điểm bất thường chuẩn hóa + ngưỡng → danh sách dòng rác</td></tr>
+      <tr><td><b class="ok">L2</b> Schema</td><td>pydbml/SQL + Pandas</td><td>DataFrame(s) + schema</td><td><code>IntegrityError[]</code> + alias cột + explicit/inferred relationships</td></tr>
       <tr><td><b class="wn">L2.5</b> Severity Stack</td><td>scipy (Little's), Logistic, table-lookup</td><td>output thô L1 + L2</td><td>severity hiệu chỉnh + <code>compound_severity</code> + <b>Dataset Verdict</b> (READY/WARN/NOT_READY)</td></tr>
       <tr><td><b class="cy">L3</b> Ontology</td><td>Pydantic (strict)</td><td>output L1 + L2 + L2.5</td><td><b>3 file JSON</b> validated (xem slide sau)</td></tr>
-      <tr><td><b class="am">L3.5</b> Charts</td><td>matplotlib</td><td>findings + lệnh vẽ JSON</td><td>PNG overview + diagnostic (bôi đỏ điểm rác)</td></tr>
-      <tr><td><b class="ro">L4</b> Narrative</td><td>Chart Architect + Mini + Master agents + Guardrail Python (sau mỗi agent)</td><td><b>chỉ</b> JSON L3 (lát cắt theo agent)</td><td>Báo cáo Markdown + biểu đồ, mọi số đã đối chiếu Allowed-Set</td></tr>
+      <tr><td><b class="am">L3.5</b> Charts</td><td>matplotlib</td><td>findings + DataFrame</td><td>PNG overview/diagnostic cho end user, không gửi L4</td></tr>
+      <tr><td><b class="ro">L4</b> Narrative</td><td>Mini + Master agents + Guardrail Python</td><td><b>chỉ</b> JSON L3 + raw samples số/chữ</td><td>Báo cáo Markdown text-only, mọi số đã đối chiếu Allowed-Set</td></tr>
     </table>
   </section>
 
@@ -350,7 +350,7 @@
     <div class="grid" style="grid-template-columns:repeat(5,1fr);gap:12px">
       <div class="card tight"><span class="pill cy">Phase 1</span><h3 style="margin-top:8px">Core engines</h3><p class="muted">ingestion + profiling + anomaly + schema (L1, L2)</p></div>
       <div class="card tight"><span class="pill cy">Phase 2</span><h3 style="margin-top:8px">Ontology + Severity</h3><p class="muted">Pydantic C1 + 4 module L2.5 + 3 file JSON (L2.5, L3)</p></div>
-      <div class="card tight"><span class="pill cy">Phase 3</span><h3 style="margin-top:8px">Visualization</h3><p class="muted">overview charts + Chart Architect (L3.5)</p></div>
+      <div class="card tight"><span class="pill cy">Phase 3</span><h3 style="margin-top:8px">Visualization</h3><p class="muted">chart artifacts cho end user (L3.5), không thuộc L4</p></div>
       <div class="card tight"><span class="pill cy">Phase 4</span><h3 style="margin-top:8px">AI + Guardrail</h3><p class="muted">validator + agents + guardrail sau mỗi agent (L4)</p></div>
       <div class="card tight"><span class="pill cy">Phase 5</span><h3 style="margin-top:8px">Tích hợp + Test</h3><p class="muted">main.py + Titanic/E-commerce + eval 50-finding</p></div>
     </div>

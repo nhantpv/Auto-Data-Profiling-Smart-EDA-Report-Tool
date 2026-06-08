@@ -40,3 +40,15 @@ class TestAnomalyDetection:
         result = run_anomaly_detection(df)
         if len(result["anomaly_scores"]) > 0:
             assert all(0 <= s <= 1 for s in result["anomaly_scores"])
+
+    def test_returns_positions_for_non_default_index(self):
+        df = pd.DataFrame({
+            "value": list(range(20)) + [1000],
+            "other": list(range(20)) + [1000],
+        }, index=list(range(100, 121)))
+
+        result = run_anomaly_detection(df, z_gate=1.0)
+
+        assert result["n_outliers"] >= 1
+        assert 120 in result["outlier_indices"]
+        assert 20 in result["outlier_positions"]

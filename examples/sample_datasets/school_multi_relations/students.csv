@@ -1,0 +1,6 @@
+student_id,student_name,truong_hoc,class_id,email
+1,An Nguyen,S01,C01,an@example.com
+2,Binh Tran,S03,C99,binh@example.com
+3,Chi Le,S02,C02,chi@example.com
+4,Dat Pham,,C02,dat@example.com
+4,Em Do,S02,C03,em@example.com

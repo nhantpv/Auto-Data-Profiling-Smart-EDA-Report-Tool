@@ -1,0 +1,9 @@
+Table orders {
+  order_id integer [pk]
+  customer_id varchar [not null]
+  order_total decimal [not null]
+  currency varchar [not null]
+  created_at timestamp
+  status varchar
+  payment_method varchar
+}

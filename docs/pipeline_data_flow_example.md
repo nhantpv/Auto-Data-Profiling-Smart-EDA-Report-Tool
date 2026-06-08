@@ -86,8 +86,7 @@ anomaly_scores = [0.99]
       "ml_impact": ["training_bias"],
       "compound_severity": "CRITICAL",
       "confidence": 0.99,
-      "top_10_samples": [ {"row_index": 899, "customer_age": 150, "ticket_price": 0} ],
-      "diagnostic_chart": "output/charts/scatter_age_price.png"
+      "top_10_samples": [ {"row_index": 899, "customer_age": 150, "ticket_price": 0} ]
     }
   ]
 }
@@ -95,29 +94,24 @@ anomaly_scores = [0.99]
 
 ---
 
-## 6. Layer 4 (Vòng 1): Chart Architect + Khám bệnh
-- **Input:** File `data_quality_findings.json` ở trên được gửi cho **Mini Agent (GPT-4o-mini)**.
-- **Hành động:** LLM đọc JSON, phát hiện ra *"Ô kìa, có khách hàng tuổi = 150 mà giá vé = 0, vô lý quá!"*. Nó quyết định phải có biểu đồ để sếp nhìn thấy sự vô lý này.
-- **Output của LLM:** LLM không trả về một câu nói bình thường. Chúng ta đã prompt ép LLM phải trả về một chuỗi JSON (Function Calling) chứa Lệnh Vẽ:
-```json
-{
-  "nhan_xet": "Cột customer_age có dữ liệu rác nghiêm trọng (tuổi = 150).",
-  "lenh_ve_bieu_do": {
-    "chart_type": "scatter",
-    "x_axis": "customer_age",
-    "y_axis": "ticket_price",
-    "title": "Phân tán Tuổi và Giá vé để bóc trần rác"
-  }
-}
-```
+## 6. Layer 3.5: Visualization phụ trợ cho end user
+- **Input:** `data_quality_findings.json` + DataFrame gốc.
+- **Hành động:** Python có thể vẽ biểu đồ chẩn đoán nếu sản phẩm cần minh họa cho người dùng. Quyết định vẽ chart thuộc code deterministic, không thuộc L4.
+- **Output:** Một file ảnh được lưu tại `output/charts/scatter_age_price.png`.
+- **Ghi chú:** Chart không được gửi vào L4 và không được dùng làm nguồn số liệu cho LLM.
 
 ---
 
-## 7. Layer 3.5: Thực thi lệnh vẽ biểu đồ (Visualization Engine)
-- **Input:** Cái cục `"lenh_ve_bieu_do"` mà con LLM vừa nhả ra.
-- **Hành động:** Code Python của chúng ta (file `visualizer.py`) nhận lệnh. Nó tự động gọi `seaborn.scatterplot(x='customer_age', y='ticket_price')` và lưu thành file ảnh `.png`.
-- **Output:** Một file ảnh được lưu tại `output/charts/scatter_age_price.png`.
-- **Ghi chú:** (Optional) Ta sẽ ném luôn cái file ảnh này ngược lại cho Agent nếu muốn nó viết nhận xét dựa trên tầm nhìn đa phương thức (Vision).
+## 7. Layer 4 (Vòng 1): Text-only Mini Agent
+- **Input:** File `data_quality_findings.json`, `dataset_verdict.json`, và raw top-k samples dạng số/chữ. Không có chart, không Vision, không lệnh vẽ biểu đồ.
+- **Hành động:** LLM đọc JSON, phát hiện ra *"Có khách hàng tuổi = 150 mà giá vé = 0, vô lý quá!"*. Nó chỉ được diễn giải dữ liệu đã có.
+- **Output của LLM:** Một đoạn nhận xét text/JSON có trace về finding gốc:
+```json
+{
+  "nhan_xet": "Cột customer_age có dữ liệu rác nghiêm trọng (tuổi = 150).",
+  "source_finding": "OUTLIER_ENSEMBLE.customer_age"
+}
+```
 
 ---
 
@@ -133,9 +127,9 @@ anomaly_scores = [0.99]
 ## 9. Layer 4 (Vòng 2): Chốt hạ Báo cáo (Master Agent)
 - **Input:** 
   1. Toàn bộ nhận xét của Mini Agent (đã qua Guardrail ✔️).
-  2. Đường link của ảnh vừa được vẽ (`output/charts/scatter_age_price.png`).
-  3. Phán quyết từ `dataset_verdict.json` (WARN).
-- **Hành động:** Master Agent (GPT-4o) ráp chữ và link ảnh lại bằng Markdown. **Sau đó Guardrail chạy lần 2** để kiểm tra đầu ra Master.
+  2. Phán quyết từ `dataset_verdict.json` (WARN).
+  3. Schema/relationship metadata nếu có.
+- **Hành động:** Master Agent (GPT-4o) ráp nhận xét thành Markdown text-only. **Sau đó Guardrail chạy lần 2** để kiểm tra đầu ra Master.
 - **Output (Final):** Báo cáo `report.md` gửi cho người dùng.
 
 ```markdown
@@ -151,10 +145,7 @@ Hệ thống phát hiện dữ liệu dị biệt nghiêm trọng cần xử lý
 - **Mức độ:** CRITICAL (cột dính nhiều lỗi, được CompoundEscalator nâng bậc)
 - **Ảnh hưởng ML:** training_bias — nếu train AI trên data này, model sẽ sai lệch.
 
-**Bằng chứng:**
-![Biểu đồ rác dữ liệu Tuổi - Giá vé](output/charts/scatter_age_price.png)
-
 **Khuyến nghị:** Cần lọc bỏ các dòng có tuổi > 100 trước khi đem train AI.
 ```
 
-*(Lúc người dùng mở báo cáo này lên, phần `![Biểu đồ...]` sẽ tự động load tấm ảnh mà Python vừa vẽ ở bước 7 ra màn hình, tạo thành một báo cáo cực kỳ trực quan và thuyết phục).*
+*(Nếu sản phẩm có sinh chart ở Layer 3.5, chart được đính kèm như artifact phụ trợ riêng cho end user. L4 không nhìn hoặc tạo chart.)*

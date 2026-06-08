@@ -102,6 +102,8 @@ class TestDataQualityFindings:
 
 from ontology.models import (
     Severity, SEVERITY_ORDER, Verdict, VerdictSummary, DatasetVerdict,
+    IntegrityError, MissingFieldContext, RelationshipInfo, SchemaEvaluationFindings,
+    SchemaMeta, TableInfo,
 )
 
 
@@ -153,3 +155,47 @@ class TestAnomalyRecordAffectedColumn:
             top_10_samples=[],
         )
         assert rec.affected_column is None
+
+
+class TestSchemaContextModels:
+    def test_missing_field_context_roundtrip(self):
+        err = IntegrityError(
+            error_type="MISSING_COLUMN",
+            description="missing school id",
+            severity="CRITICAL",
+            affected_table="students",
+            affected_column="id_school",
+            missing_field_context=MissingFieldContext(
+                expected_column="id_school",
+                inferred_meaning="school identifier or school attribute",
+                candidate_aliases=["trường học"],
+            ),
+        )
+        restored = IntegrityError.model_validate_json(err.model_dump_json())
+        assert restored.missing_field_context is not None
+        assert restored.missing_field_context.expected_column == "id_school"
+        assert restored.missing_field_context.is_intentional_missing is None
+
+    def test_relationships_roundtrip(self):
+        schema = SchemaEvaluationFindings(
+            schema_meta=SchemaMeta(schema_file="shop.dbml", total_tables=2, total_relationships=0),
+            tables=[
+                TableInfo(name="schools", columns=["id"]),
+                TableInfo(name="students", columns=["id_school"]),
+            ],
+            relationships=[
+                RelationshipInfo(
+                    child_table="students",
+                    child_column="id_school",
+                    parent_table="schools",
+                    parent_column="id",
+                    relationship_type="inferred_fk",
+                    status="missing_from_schema",
+                    confidence=0.91,
+                    evidence=["value_coverage=1.000"],
+                )
+            ],
+        )
+        restored = SchemaEvaluationFindings.model_validate_json(schema.model_dump_json())
+        assert restored.relationships[0].relationship_type == "inferred_fk"
+        assert restored.relationships[0].status == "missing_from_schema"

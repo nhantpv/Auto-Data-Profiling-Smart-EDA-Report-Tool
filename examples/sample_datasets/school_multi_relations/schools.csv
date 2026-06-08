@@ -1,0 +1,5 @@
+id_school,school_name,province
+S01,Alpha School,Ha Noi
+S02,Beta School,Da Nang
+S02,Beta Duplicate,Da Nang
+,Missing Key,Ho Chi Minh

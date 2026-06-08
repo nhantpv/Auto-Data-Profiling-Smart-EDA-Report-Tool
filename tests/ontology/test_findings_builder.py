@@ -92,3 +92,45 @@ class TestBuildDataQualityFindings:
         f = build_data_quality_findings("c.csv", df, run_profiling(df), run_anomaly_detection(df))
         assert f.columns["city"].type in ("Categorical", "Text")
         assert all(c.type != "Unknown" for c in f.columns.values())
+
+    def test_exports_full_outlier_rows_and_uses_row_position(self, tmp_path):
+        profile = {
+            "table": {
+                "n": 3,
+                "n_var": 2,
+                "memory_size": 0,
+                "p_cells_missing": 0.0,
+                "n_duplicates": 0,
+                "p_duplicates": 0.0,
+            },
+            "variables": {
+                "id": {"type": "Numeric", "n_missing": 0, "p_missing": 0.0, "n_distinct": 3},
+                "value": {"type": "Numeric", "n_missing": 0, "p_missing": 0.0, "n_distinct": 3},
+            },
+        }
+        df = pd.DataFrame({"id": [1, 2, 3], "value": [10, 20, 999]}, index=[10, 20, 30])
+        anomaly_result = {
+            "skipped": False,
+            "n_outliers": 1,
+            "outlier_indices": [30],
+            "outlier_positions": [2],
+            "anomaly_scores": [0.99],
+        }
+
+        findings = build_data_quality_findings(
+            "custom.csv",
+            df,
+            profile,
+            anomaly_result,
+            mechs={},
+            artifact_dir=tmp_path,
+            artifact_prefix="custom",
+        )
+
+        outlier = next(a for a in findings.anomalies if a.issue_type == "OUTLIER_ENSEMBLE")
+        assert outlier.top_10_samples[0]["value"] == 999
+        assert outlier.top_10_samples[0]["_row_index"] == 30
+        assert outlier.top_10_samples[0]["_row_position"] == 2
+        assert outlier.full_anomalies_export_path is not None
+        exported = pd.read_csv(outlier.full_anomalies_export_path)
+        assert exported.loc[0, "value"] == 999

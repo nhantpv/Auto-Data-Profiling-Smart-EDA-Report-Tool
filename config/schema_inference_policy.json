@@ -1,0 +1,65 @@
+{
+  "_meta": {
+    "version": "0.1",
+    "status": "heuristic_v0_configurable",
+    "purpose": "Name normalization, alias matching, primary-key scoring, and relationship inference defaults."
+  },
+  "generic_tokens": ["id", "ma", "code", "key", "fk", "pk", "uuid", "no", "number"],
+  "phrase_synonyms": {
+    "truonghoc": "school",
+    "hocsinh": "student",
+    "sinhvien": "student",
+    "lophoc": "class",
+    "giaovien": "teacher",
+    "khachhang": "customer",
+    "nguoidung": "user",
+    "donhang": "order",
+    "sanpham": "product"
+  },
+  "token_synonyms": {
+    "truong": "school",
+    "school": "school",
+    "schools": "school",
+    "hoc": "study",
+    "hocsinh": "student",
+    "student": "student",
+    "students": "student",
+    "sinhvien": "student",
+    "lop": "class",
+    "class": "class",
+    "classes": "class",
+    "gv": "teacher",
+    "teacher": "teacher",
+    "teachers": "teacher",
+    "khachhang": "customer",
+    "customer": "customer",
+    "customers": "customer",
+    "user": "user",
+    "users": "user",
+    "order": "order",
+    "orders": "order",
+    "product": "product",
+    "products": "product"
+  },
+  "thresholds": {
+    "alias_similarity": 0.82,
+    "table_match_score": 0.5,
+    "primary_key_score": 0.55,
+    "relationship_value_coverage": 0.6,
+    "relationship_name_score": 0.35,
+    "relationship_confidence": 0.65
+  },
+  "primary_key_weights": {
+    "identifier_token": 0.35,
+    "generic_identifier_exact": 0.4,
+    "table_concept_match": 0.35,
+    "table_identifier_pattern": 0.4,
+    "first_column": 0.1,
+    "unique_key": 0.15
+  },
+  "relationship_weights": {
+    "coverage": 0.45,
+    "name_score": 0.35,
+    "parent_unique_bonus": 0.2
+  }
+}

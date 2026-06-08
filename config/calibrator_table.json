@@ -1,6 +1,16 @@
 {
+  "_meta": {
+    "version": "0.1",
+    "calibration_status": "heuristic_v0_not_benchmark_calibrated",
+    "basis": [
+      "DAMA-DMBOK data-quality dimensions are used as labels for issue type mapping.",
+      "Thresholds are operational defaults pending empirical calibration.",
+      "Future calibration should benchmark against labelled public datasets and document precision/recall or business-risk trade-offs per issue family."
+    ]
+  },
   "completeness": {
     "metric": "p_missing",
+    "basis": "heuristic_v0; escalated by MAR/MNAR missingness mechanism",
     "thresholds": [
       {"max": 0.05, "severity": "INFO"},
       {"max": 0.20, "severity": "WARN"},
@@ -11,6 +21,7 @@
   },
   "outlier_ensemble": {
     "metric": "outlier_ratio",
+    "basis": "heuristic_v0 over PyOD ensemble outlier ratio; algorithm choice should be validated against ADBench-style anomaly benchmarks before production scoring",
     "thresholds": [
       {"max": 0.05, "severity": "WARN"},
       {"max": 1.01, "severity": "HIGH"}
@@ -19,6 +30,7 @@
   },
   "duplicate": {
     "metric": "p_duplicates",
+    "basis": "heuristic_v0; duplicates map to DAMA Uniqueness risk",
     "thresholds": [
       {"max": 0.05, "severity": "WARN"},
       {"max": 1.01, "severity": "HIGH"}

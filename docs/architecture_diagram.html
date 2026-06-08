@@ -91,11 +91,12 @@
             SS2 --> SS3
             SS3 --> SS4
 
-            %% ONTOLOGY (L3 & L3.5)
-            subgraph L3 ["Layer 3 & 3.5: Artifacts & Charts (Đóng gói kết quả)"]
+            %% ONTOLOGY (L3 & optional L3.5)
+            subgraph L3 ["Layer 3 & optional L3.5: Artifacts (Đóng gói kết quả)"]
                 J1["data_quality_findings.json"]:::artifact
                 J2["schema_evaluation_findings.json"]:::artifact
                 J3["dataset_verdict.json"]:::artifact
+                R0["Raw Top-K Samples (số/chữ)"]:::artifact
                 C1["Overview Charts"]:::artifact
                 C2["Diagnostic Charts"]:::artifact
             end
@@ -103,12 +104,13 @@
             SS3 --> J1
             E3 --> J2
             SS4 --> J3
+            D1 --> R0
             E1 --> C1
+            J1 --> C2
 
             %% LLM REPORTING (L4)
-            subgraph L4 ["Layer 4: LLM Multi-Agent Orchestration (Đội ngũ AI Báo cáo)"]
+            subgraph L4 ["Layer 4: Text-only LLM Reporting (Không Chart/Vision)"]
                 R1{"LLM Router"}:::agent
-                CA["Chart Architect Agent"]:::agent
                 A1["Mini Agent (Data QA)"]:::agent
                 A2["Mini Agent (Architect)"]:::agent
                 G1["🛑 Guardrail"]:::engine
@@ -116,20 +118,17 @@
                 G2["🛑 Guardrail"]:::engine
             end
 
-            J1 & J3 & C1 --> R1
+            J1 & J3 & R0 --> R1
             J2 --> R1
-            
-            R1 --> CA
-            CA -->|"Lệnh vẽ biểu đồ"| C2
-            C2 -->|"Trả ảnh"| A1
-            
-            R1 -->|"JSON + Overview Charts"| A1
-            R1 -->|"JSON DBML"| A2
+
+            R1 -->|"JSON + raw samples only"| A1
+            R1 -->|"schema JSON + relationship metadata"| A2
             
             A1 & A2 --> G1
             G1 -->|"Đã kiểm tra số liệu"| M1
             M1 --> G2
             G2 -->|"Tổng hợp"| OUT["Final EDA Markdown Report"]:::input
+            C1 & C2 --> USER_ARTIFACTS["Optional chart artifacts for end user"]:::input
         </div>
     </div>
 </body>

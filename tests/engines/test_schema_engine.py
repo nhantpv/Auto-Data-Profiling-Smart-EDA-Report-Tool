@@ -2,7 +2,13 @@ import pytest
 import pandas as pd
 from pathlib import Path
 from ingestion.schema_reader import parse_schema
-from engines.schema_engine import match_table, validate_table, check_foreign_keys
+from engines.schema_engine import (
+    check_foreign_keys,
+    load_schema_inference_policy,
+    match_table,
+    validate_schema_multi,
+    validate_table,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
@@ -68,6 +74,30 @@ class TestParseSchema:
         parsed = self._parse_inline(_TWO_TABLE_DBML, tmp_path)
         # type key exists
         assert "type" in parsed["users"]["columns"]["email"]
+
+
+class TestSchemaInferencePolicy:
+    def test_policy_file_overrides_thresholds(self, tmp_path):
+        policy_path = tmp_path / "policy.json"
+        policy_path.write_text(
+            """
+{
+  "thresholds": {
+    "alias_similarity": 0.91
+  },
+  "token_synonyms": {
+    "campus": "school"
+  }
+}
+""",
+            encoding="utf-8",
+        )
+
+        policy = load_schema_inference_policy(policy_path)
+
+        assert policy["thresholds"]["alias_similarity"] == 0.91
+        assert policy["thresholds"]["primary_key_score"] == 0.55
+        assert policy["token_synonyms"]["campus"] == "school"
 
 
 class TestMatchTable:
@@ -149,6 +179,28 @@ class TestValidateTableMissingExtra:
         df = pd.DataFrame({"id": [1, 2], "label": ["a", "b"], "score": [1.0, 2.0]})
         errors = validate_table(df, "items", parsed)
         assert errors == []
+
+    def test_semantic_alias_is_reported_not_missing_or_extra(self, tmp_path):
+        parsed = self._parsed(
+            """
+Table students {
+  id integer [pk]
+  id_school integer
+}
+""",
+            tmp_path,
+        )
+        df = pd.DataFrame({"id": [1, 2], "trường học": [10, 20]})
+        errors = validate_table(df, "students", parsed)
+
+        alias = [e for e in errors if e.error_type == "COLUMN_ALIAS_INFERRED"]
+        assert len(alias) == 1
+        assert alias[0].affected_column == "id_school"
+        assert alias[0].missing_field_context is not None
+        assert alias[0].missing_field_context.candidate_aliases == ["trường học"]
+        assert alias[0].missing_field_context.is_intentional_missing is None
+        assert [e for e in errors if e.error_type == "MISSING_COLUMN"] == []
+        assert [e for e in errors if e.error_type == "EXTRA_COLUMN"] == []
 
 
 class TestValidateTableTypeMismatch:
@@ -399,3 +451,114 @@ Ref: orders.user_id > users.id
         unchecked = [e for e in errors if e.error_type == "FK_UNCHECKED"]
         assert len(unchecked) == 1
         assert "family" in unchecked[0].description.lower() or "type" in unchecked[0].description.lower()
+
+    def test_fk_alias_column_is_checked_for_orphans(self):
+        refs = [{
+            "child_table": "students",
+            "fk_col": "school_id",
+            "parent_table": "schools",
+            "pk_col": "id_school",
+        }]
+        schools = pd.DataFrame({"id_school": ["S01", "S02"], "school_name": ["A", "B"]})
+        students = pd.DataFrame({"student_id": [1, 2], "truong_hoc": ["S01", "S99"]})
+
+        errors = check_foreign_keys({"schools": schools, "students": students}, refs)
+
+        orphans = [e for e in errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        assert len(orphans) == 1
+        assert orphans[0].affected_column == "school_id"
+        assert orphans[0].affected_count == 1
+        assert any(sample.get("truong_hoc") == "S99" for sample in orphans[0].top_10_samples)
+
+
+class TestRelationshipInference:
+    def test_missing_fk_metadata_is_inferred_from_values_and_names(self, tmp_path):
+        schema_path = tmp_path / "school.dbml"
+        schema_path.write_text(
+            """
+Table schools {
+  id integer [pk]
+  name varchar
+}
+Table students {
+  id integer [pk]
+  id_school integer
+}
+""",
+            encoding="utf-8",
+        )
+        schools_path = tmp_path / "schools.csv"
+        students_path = tmp_path / "students.csv"
+        pd.DataFrame({"id": [10, 20], "name": ["A", "B"]}).to_csv(schools_path, index=False)
+        pd.DataFrame({"id": [1, 2, 3], "id_school": [10, 20, 10]}).to_csv(students_path, index=False)
+
+        findings = validate_schema_multi([str(schools_path), str(students_path)], str(schema_path))
+        inferred = [r for r in findings.relationships if r.relationship_type == "inferred_fk"]
+        assert len(inferred) == 1
+        assert inferred[0].child_table == "students"
+        assert inferred[0].child_column == "id_school"
+        assert inferred[0].parent_table == "schools"
+        assert inferred[0].parent_column == "id"
+        assert inferred[0].status == "missing_from_schema"
+
+        missing_ref = [e for e in findings.integrity_errors if e.error_type == "MISSING_RELATIONSHIP_METADATA"]
+        assert len(missing_ref) == 1
+        assert missing_ref[0].relationship is not None
+        assert missing_ref[0].relationship.child_column == "id_school"
+
+    def test_schema_and_relationships_are_inferred_without_schema_file(self, tmp_path):
+        schools_path = tmp_path / "schools.csv"
+        classes_path = tmp_path / "classes.csv"
+        students_path = tmp_path / "students.csv"
+        pd.DataFrame({
+            "id_school": ["S01", "S02"],
+            "school_name": ["Alpha", "Beta"],
+        }).to_csv(schools_path, index=False)
+        pd.DataFrame({
+            "class_id": ["C01", "C02"],
+            "school_id": ["S01", "S02"],
+        }).to_csv(classes_path, index=False)
+        pd.DataFrame({
+            "student_id": [1, 2, 3],
+            "student_name": ["An", "Binh", "Chi"],
+            "truong_hoc": ["S01", "S02", "S99"],
+            "class_id": ["C01", "C99", "C02"],
+        }).to_csv(students_path, index=False)
+
+        findings = validate_schema_multi([str(schools_path), str(classes_path), str(students_path)], schema_path=None)
+
+        assert findings.schema_meta.schema_file == "inferred_from_data"
+        assert findings.schema_meta.total_tables == 3
+        relationships = [r for r in findings.relationships if r.relationship_type == "inferred_fk"]
+        relationship_keys = {
+            (r.child_table, r.child_column, r.parent_table, r.parent_column, r.status)
+            for r in relationships
+        }
+        assert ("students", "truong_hoc", "schools", "id_school", "inferred_from_data") in relationship_keys
+        assert ("students", "class_id", "classes", "class_id", "inferred_from_data") in relationship_keys
+
+        orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
+        orphan_keys = {(e.affected_table, e.affected_column) for e in orphans}
+        assert ("students", "truong_hoc") in orphan_keys
+        assert ("students", "class_id") in orphan_keys
+        assert any(sample.get("truong_hoc") == "S99" for e in orphans for sample in e.top_10_samples)
+        assert any(sample.get("class_id") == "C99" for e in orphans for sample in e.top_10_samples)
+
+    def test_inferred_primary_key_still_reports_duplicate_and_null(self, tmp_path):
+        schools_path = tmp_path / "schools.csv"
+        classes_path = tmp_path / "classes.csv"
+        pd.DataFrame({
+            "id_school": ["S01", "S01", None],
+            "school_name": ["Alpha", "Duplicate", "Missing"],
+        }).to_csv(schools_path, index=False)
+        pd.DataFrame({
+            "class_id": ["C01", "C02"],
+            "school_id": ["S01", "S02"],
+        }).to_csv(classes_path, index=False)
+
+        findings = validate_schema_multi([str(schools_path), str(classes_path)], schema_path=None)
+
+        pk_null = [e for e in findings.integrity_errors if e.error_type == "PK_NULL"]
+        pk_dup = [e for e in findings.integrity_errors if e.error_type == "PK_DUPLICATE"]
+        assert any(e.affected_table == "schools" and e.affected_column == "id_school" for e in pk_null)
+        assert any(e.affected_table == "schools" and e.affected_column == "id_school" for e in pk_dup)

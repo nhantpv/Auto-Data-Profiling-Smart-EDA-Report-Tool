@@ -13,9 +13,12 @@ src/ingestion/csv_reader.py
 src/ingestion/readers.py
 src/ingestion/registry.py
 src/ingestion/sampling.py
+src/ingestion/schema_reader.py
 src/ontology/__init__.py
 src/ontology/findings_builder.py
 src/ontology/models.py
+src/reporting/__init__.py
+src/reporting/summary_renderer.py
 src/severity/__init__.py
 src/severity/aggregator.py
 src/severity/calibrator.py
@@ -26,4 +29,6 @@ src/smart_eda.egg-info/SOURCES.txt
 src/smart_eda.egg-info/dependency_links.txt
 src/smart_eda.egg-info/requires.txt
 src/smart_eda.egg-info/top_level.txt
+src/webapp/__init__.py
+src/webapp/app.py
 tests/test_integration.py

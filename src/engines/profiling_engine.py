@@ -13,12 +13,14 @@ def _count_duplicates(df: pd.DataFrame) -> int:
     return int(df.duplicated(subset=subset).sum())
 
 
-def run_profiling(df: pd.DataFrame, minimal: bool = True) -> dict:
+def run_profiling(df: pd.DataFrame, minimal: bool = False) -> dict:
     logger.info("Running profiling on DataFrame with %d rows, %d cols.", len(df), len(df.columns))
     profile = ProfileReport(df, minimal=minimal, progress_bar=False)
     raw_json_str = profile.to_json()
     result = json.loads(raw_json_str)
-    if "table" in result and "n_duplicates" not in result["table"]:
-        result["table"]["n_duplicates"] = _count_duplicates(df)
+    if "table" in result:
+        n_duplicates = _count_duplicates(df)
+        result["table"]["n_duplicates"] = n_duplicates
+        result["table"]["p_duplicates"] = n_duplicates / len(df) if len(df) else 0.0
     logger.info("Profiling complete. Found %d variables.", len(result.get("variables", {})))
     return result

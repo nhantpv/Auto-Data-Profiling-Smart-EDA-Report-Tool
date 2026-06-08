@@ -88,12 +88,17 @@ def run_anomaly_detection(
     outlier_original_indices = [clean_indices[i] for i in outlier_positions]
     outlier_scores = [round(float(display[i]), 4) for i in outlier_positions]
 
-    sorted_pairs = sorted(zip(outlier_original_indices, outlier_scores), key=lambda x: -x[1])
-    sorted_indices = [p[0] for p in sorted_pairs]
-    sorted_scores = [p[1] for p in sorted_pairs]
+    sorted_records = sorted(
+        zip(outlier_positions.tolist(), outlier_original_indices, outlier_scores),
+        key=lambda x: -x[2],
+    )
+    sorted_positions = [p[0] for p in sorted_records]
+    sorted_indices = [p[1] for p in sorted_records]
+    sorted_scores = [p[2] for p in sorted_records]
 
     return {
         "outlier_indices": sorted_indices,
+        "outlier_positions": sorted_positions,
         "anomaly_scores": sorted_scores,
         "all_scores": [round(float(s), 4) for s in display],
         "n_outliers": len(sorted_indices),

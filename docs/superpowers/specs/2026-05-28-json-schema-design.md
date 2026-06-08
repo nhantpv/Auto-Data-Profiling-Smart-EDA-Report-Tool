@@ -8,8 +8,8 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
 1. **Strict Validation (Đổ bê tông cấu trúc):** Sử dụng `Pydantic` để định nghĩa toàn bộ cấu trúc JSON. Nếu Layer 1 & 2 xuất ra sai kiểu dữ liệu, hệ thống sẽ báo lỗi ngay lập tức thay vì đẩy "rác" cho LLM.
 2. **Flexible Expansion (Mở rộng linh hoạt):** Các class Pydantic sẽ có một trường `additional_metrics: Dict[str, Any]` để chứa các chỉ số thống kê dị biệt mà không làm gãy cấu trúc lõi.
 3. **Anomaly Handling (Xử lý dung lượng dữ liệu rác):** Áp dụng chiến lược "Summarization + Top-K". Thay vì gửi hàng chục ngàn dòng outliers, JSON chỉ chứa: Tổng số lượng lỗi, tỷ lệ %, và **Top 10 dòng rác tồi tệ nhất** (Anomaly Score cao nhất).
-4. **Multimodal Vision (Phân tích đa phương thức):** Tận dụng năng lực Vision của LLM (như GPT-4o). JSON sẽ chứa đường link dẫn tới các biểu đồ. Lúc gọi AI, ta gửi cả JSON VÀ hình ảnh Biểu đồ (để AI nhìn thấy bức tranh tổng thể).
-5. **Đồ thị (Charts) lai ghép:** Đối với Overview Charts, không code vẽ lại mà **trích xuất (extract)** trực tiếp từ output của `fg-data-profiling`. Đối với Diagnostic Charts, code Python sẽ vẽ **toàn bộ 100% các điểm rác** (VD: 1000 điểm đỏ) đè lên dữ liệu thường, giúp hiển thị toàn cảnh dù LLM chỉ đọc Top 10.
+4. **L4 text-only:** LLM không nhận chart, không Vision, không sinh lệnh vẽ biểu đồ. Payload L4 chỉ gồm JSON findings và raw top-k samples dạng số/chữ.
+5. **Đồ thị (Charts) là artifact phụ trợ:** Overview/Diagnostic charts có thể được Python sinh ra cho end user ở L3.5, nhưng không nằm trong contract bắt buộc của L4 và không được dùng làm nguồn số liệu cho LLM.
 6. **Data Export (Bắt trọn dữ liệu):** Bên cạnh báo cáo Markdown, hệ thống tự động xuất (dump) toàn bộ 100% các dòng dữ liệu bị lỗi ra các file riêng biệt (VD: `output/anomalies/outliers_export.csv`) để Data Engineer có thể tải về xử lý.
 
 ## 3. Data Contracts (Cấu trúc JSON)
@@ -67,7 +67,6 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
         {"PassengerId": 259, "Age": 35, "Fare": 512.3292, "anomaly_score": 0.99},
         {"PassengerId": 738, "Age": 35, "Fare": 512.3292, "anomaly_score": 0.98}
       ],
-      "diagnostic_chart": "output/charts/age_fare_scatter.png",
       "full_anomalies_export_path": "output/anomalies/outliers_export.csv"
     }
   ]
@@ -75,12 +74,12 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
 ```
 
 ### 3.2. schema_evaluation_findings.json (Gửi cho Architect Agent)
-Đầu ra từ `pydbml` và logic kiểm tra Pandas.
+Đầu ra từ `pydbml`/SQL DDL parser và logic kiểm tra Pandas. File này phải thể hiện được cả quan hệ explicit trong schema và quan hệ inferred khi thiếu FK metadata.
 
 ```json
 {
   "schema_meta": {
-    "dbml_file": "ecommerce.dbml",
+    "schema_file": "ecommerce.dbml",
     "total_tables": 5,
     "total_relationships": 4
   },
@@ -96,9 +95,54 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
       "description": "Có 15 orders chứa user_id không tồn tại trong bảng Users",
       "severity": "CRITICAL",
       "affected_table": "orders",
+      "affected_column": "user_id",
       "top_10_samples": [
         {"order_id": 101, "invalid_user_id": 9999}
       ]
+    },
+    {
+      "error_type": "COLUMN_ALIAS_INFERRED",
+      "description": "Column 'id_school' absent but 'trường học' is a likely alias",
+      "severity": "WARN",
+      "affected_table": "students",
+      "affected_column": "id_school",
+      "missing_field_context": {
+        "expected_column": "id_school",
+        "table_context": "Table 'students' expects 2 schema column(s); loaded data has 2 column(s).",
+        "inferred_meaning": "school identifier or school attribute",
+        "is_intentional_missing": null,
+        "intentional_missing_basis": "unknown; source owner confirmation required",
+        "candidate_aliases": ["trường học"]
+      }
+    },
+    {
+      "error_type": "MISSING_RELATIONSHIP_METADATA",
+      "description": "Likely relationship students.id_school -> schools.id is present in data but not declared in schema",
+      "severity": "WARN",
+      "affected_table": "students",
+      "affected_column": "id_school",
+      "relationship": {
+        "child_table": "students",
+        "child_column": "id_school",
+        "parent_table": "schools",
+        "parent_column": "id",
+        "relationship_type": "inferred_fk",
+        "status": "missing_from_schema",
+        "confidence": 0.91,
+        "evidence": ["value_coverage=1.000", "name_score=0.920"]
+      }
+    }
+  ],
+  "relationships": [
+    {
+      "child_table": "orders",
+      "child_column": "user_id",
+      "parent_table": "users",
+      "parent_column": "id",
+      "relationship_type": "explicit_fk",
+      "status": "declared_in_schema",
+      "confidence": 1.0,
+      "evidence": ["Declared in schema metadata"]
     }
   ]
 }
@@ -127,5 +171,5 @@ Thiết kế bộ khung (Data Contract) để chuẩn hóa dữ liệu đầu ra
 ```
 
 ## 4. Ingestion Layer (Đầu vào)
-- **Data Reader:** Sử dụng `pandas` để đọc CSV/Excel. Nếu file > 500MB hoặc > 500k rows, tự động trigger hàm `sample(n=500000)`.
-- **DBML Parser:** Sử dụng thư viện `pydbml` (PyPi) để parse cấu trúc quan hệ thành các object Python có thể duyệt (iterable) để phục vụ cho `schema_engine`.
+- **Data Reader:** Sử dụng `pandas` để đọc CSV/Excel/Parquet/JSON/JSONL. Nếu file > 500MB hoặc > 500k rows, tự động trigger hàm `sample(n=500000)`.
+- **Schema Parser:** Sử dụng `pydbml` cho DBML và SQL DDL adapter cho `.sql`, trả về cùng một `UnifiedSchemaResult` để phục vụ `schema_engine`.

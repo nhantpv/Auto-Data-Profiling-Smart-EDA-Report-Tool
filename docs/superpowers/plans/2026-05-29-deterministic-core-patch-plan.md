@@ -13,9 +13,9 @@
 - **Verdict (trục B — phán quyết toàn dataset):** enum `READY / WARN / NOT_READY`. Là **field khác**
   trục A, chỉ tình cờ trùng chữ `WARN`. Không trộn hai trục.
 - **Diagnostic chart:** vẽ bằng **matplotlib (Python deterministic)**, KHÔNG để LLM ra lệnh vẽ.
-  → `diagnostic_chart` được điền ở **L3.5 (visualizer)**, ngay sau L3, **trước** khi gọi LLM.
+  → Chart là artifact phụ trợ cho end user ở **L3.5**, không gửi vào L4.
 - **Ingestion:** theo **Plugin Architecture** (nguyên tắc kiến trúc số 1), MVP phải đọc **CSV +
-  Excel + Parquet**.
+  Excel + Parquet + JSON/JSONL**.
 
 ---
 
@@ -471,7 +471,7 @@ class TestLoadAny:
 ## Patch 5 — Visualizer L3.5 (giải quyết NEW-1) — NHIỆM VỤ MỚI
 
 Diagnostic chart = matplotlib deterministic, vẽ **100% điểm rác đè lên dữ liệu thường** (Quyết định 5),
-điền `diagnostic_chart` **trước** khi gọi LLM.
+nhưng không truyền chart/path ảnh vào L4.
 
 ### 5a. `src/engines/visualizer.py` (mới)
 
@@ -571,10 +571,10 @@ Thêm sau bước build findings, trước khi dump JSON:
 
 **AC Patch 5:** `pytest tests/engines/test_visualizer.py tests/test_integration.py -v` → all pass.
 
-> **Sequencing (NEW-1 đã đóng):** L3 (builder) → L3.5 (visualizer điền path) → L4 (LLM nhận JSON đã
-> có path + ảnh). LLM **không** ra lệnh vẽ diagnostic chart nữa. `overview_charts` (heatmap, missing
-> matrix) vẫn theo Quyết định 5 = **trích xuất từ ydata-profiling**, là task riêng — KHÔNG nằm trong
-> patch này (đánh dấu để khỏi nhầm là đã xong).
+> **Sequencing (NEW-1 đã đóng):** L3 (builder) → L3.5 (visualizer tạo chart artifact cho end user)
+> → L4 (LLM chỉ nhận JSON + raw samples dạng số/chữ). LLM **không** ra lệnh vẽ diagnostic chart và
+> không nhận ảnh/chart. `overview_charts` (heatmap, missing matrix) vẫn theo Quyết định 5 = task riêng
+> — KHÔNG nằm trong patch này (đánh dấu để khỏi nhầm là đã xong).
 
 ---
 

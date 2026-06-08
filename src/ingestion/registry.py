@@ -2,10 +2,10 @@ from pathlib import Path
 from typing import List
 import pandas as pd
 from ingestion.base import DataReader
-from ingestion.readers import CSVReader, ExcelReader, ParquetReader
+from ingestion.readers import CSVReader, ExcelReader, JSONReader, ParquetReader
 from ingestion.sampling import sample_if_large
 
-_READERS: List[DataReader] = [CSVReader(), ExcelReader(), ParquetReader()]
+_READERS: List[DataReader] = [CSVReader(), ExcelReader(), ParquetReader(), JSONReader()]
 
 
 def _pick_reader(path: str) -> DataReader:

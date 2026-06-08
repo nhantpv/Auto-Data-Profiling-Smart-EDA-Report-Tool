@@ -1,0 +1,30 @@
+Table schools {
+  id_school varchar [pk]
+  school_name varchar [not null]
+  province varchar
+}
+
+Table classes {
+  class_id varchar [pk]
+  school_id varchar [not null]
+  grade integer
+}
+
+Table students {
+  student_id integer [pk]
+  student_name varchar [not null]
+  school_id varchar [not null]
+  class_id varchar [not null]
+  email varchar [unique]
+}
+
+Table teachers {
+  teacher_id integer [pk]
+  school_id varchar
+  teacher_name varchar [not null]
+}
+
+Ref: classes.school_id > schools.id_school
+Ref: students.school_id > schools.id_school
+Ref: students.class_id > classes.class_id
+Ref: teachers.school_id > schools.id_school

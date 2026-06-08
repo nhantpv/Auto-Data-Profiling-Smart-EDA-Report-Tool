@@ -1,0 +1,68 @@
+[
+  {
+    "id": "students_csv_dirty",
+    "title": "Students CSV - quality and schema errors",
+    "mode": "single",
+    "data_files": ["students_csv_dirty/students.csv"],
+    "schema_file": "students_csv_dirty/students.dbml",
+    "formats": ["csv", "dbml"],
+    "error_profile": [
+      "duplicate and null primary key",
+      "missing required values",
+      "type mismatch",
+      "missing and extra columns",
+      "numeric outliers"
+    ]
+  },
+  {
+    "id": "orders_json_dirty",
+    "title": "Orders JSON - invalid business records",
+    "mode": "single",
+    "data_files": ["orders_json_dirty/orders.json"],
+    "schema_file": "orders_json_dirty/orders.dbml",
+    "formats": ["json", "dbml"],
+    "error_profile": [
+      "duplicate and null primary key",
+      "negative and extreme totals",
+      "missing required values",
+      "schema drift"
+    ]
+  },
+  {
+    "id": "school_multi_relations",
+    "title": "School multi-table - broken relationships",
+    "mode": "multi",
+    "data_files": [
+      "school_multi_relations/schools.csv",
+      "school_multi_relations/classes.csv",
+      "school_multi_relations/students.csv"
+    ],
+    "schema_file": "school_multi_relations/school_schema.dbml",
+    "formats": ["csv", "dbml"],
+    "error_profile": [
+      "orphan foreign keys",
+      "missing table",
+      "alias column school_id versus truong_hoc",
+      "duplicate primary keys",
+      "missing relationship context"
+    ]
+  },
+  {
+    "id": "school_multi_infer_schema",
+    "title": "School multi-table - infer schema from data",
+    "mode": "multi",
+    "data_files": [
+      "school_multi_relations/schools.csv",
+      "school_multi_relations/classes.csv",
+      "school_multi_relations/students.csv"
+    ],
+    "formats": ["csv"],
+    "error_profile": [
+      "no dbml or sql ddl",
+      "inferred primary keys",
+      "inferred foreign keys",
+      "orphan relationships",
+      "alias-style column names"
+    ]
+  }
+]

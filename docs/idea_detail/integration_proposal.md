@@ -15,8 +15,8 @@
 | **L2 Anomaly** | PyOD Ensemble = IForest + ECOD + LOF, average score (ADBench-recommended) | Chỉ chạy trên numeric cols, contamination=0.05 |
 | **L2 Schema** | pydbml + Pandas FK-check | Tự code (chưa ai làm OSS) |
 | **L3 Ontology** | TÁCH 2 file JSON chuẩn hoá DAMA: `data_quality_findings.json` + `schema_evaluation_findings.json` | Tránh ngợp context LLM |
-| **L3.5 Charts** | Dual: Overview (extract từ ydata) + Diagnostic (LLM-directed, vẽ 100% rác đè lên thường) | LLM ra lệnh vẽ qua JSON |
-| **L4 Reporting** | Multi-agent OpenAI: Mini (gpt-4o-mini, 2.5M tok/day) + Master (gpt-4o/o1, 250k tok/day) | Mỗi mini agent đọc 1 mảnh JSON |
+| **L3.5 Charts** | Optional chart artifacts cho end user | Chart không đi vào L4 |
+| **L4 Reporting** | Multi-agent OpenAI: Mini (gpt-4o-mini, 2.5M tok/day) + Master (gpt-4o/o1, 250k tok/day) | Mỗi mini agent đọc 1 mảnh JSON + raw samples dạng số/chữ, không chart |
 | **NFR** | Sampling 500k/500MB; retry 3× + graceful degradation | Pydantic strict cho contract |
 
 ### B. `superpowers/` — Plan TDD đã code-ready

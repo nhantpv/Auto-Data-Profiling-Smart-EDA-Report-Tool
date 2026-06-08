@@ -1,0 +1,49 @@
+{
+  "records": [
+    {
+      "order_id": 1001,
+      "customer_id": "C001",
+      "order_total": 129.9,
+      "currency": "VND",
+      "created_at": "2026-01-01T09:00:00",
+      "status": "paid",
+      "coupon_code": "NEW10"
+    },
+    {
+      "order_id": 1002,
+      "customer_id": "C002",
+      "order_total": 249.5,
+      "currency": "VND",
+      "created_at": "2026-01-02T10:30:00",
+      "status": "paid",
+      "coupon_code": null
+    },
+    {
+      "order_id": 1002,
+      "customer_id": "C003",
+      "order_total": 99999999,
+      "currency": "VND",
+      "created_at": "2026-01-03T11:00:00",
+      "status": "paid",
+      "coupon_code": "VIP"
+    },
+    {
+      "order_id": null,
+      "customer_id": "C004",
+      "order_total": -15,
+      "currency": "VND",
+      "created_at": "not-a-date",
+      "status": "refunded",
+      "coupon_code": null
+    },
+    {
+      "order_id": 1005,
+      "customer_id": null,
+      "order_total": "unknown",
+      "currency": "",
+      "created_at": "2026-01-05T14:00:00",
+      "status": "",
+      "coupon_code": "BAD"
+    }
+  ]
+}
