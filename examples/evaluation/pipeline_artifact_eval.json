@@ -1,0 +1,14 @@
+{
+  "schema_version": "pipeline_artifact_eval_v1",
+  "cases": [
+    {
+      "id": "outliers_realistic_single",
+      "mode": "single",
+      "data_files": ["tests/fixtures/outliers_realistic.csv"],
+      "schema_file": null,
+      "profiling_minimal": true,
+      "expect_charts": true,
+      "expect_anomaly_exports": true
+    }
+  ]
+}

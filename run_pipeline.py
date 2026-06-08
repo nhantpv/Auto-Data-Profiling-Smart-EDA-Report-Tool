@@ -12,6 +12,7 @@ sys.path.insert(0, str(SRC))
 from ingestion.registry import load_any
 from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
+from engines.visualizer import attach_diagnostic_charts
 from engines.schema_engine import build_schema_findings, validate_schema_multi
 from ontology.findings_builder import build_data_quality_findings
 from ontology.models import AnomalyRecord, DataQualityFindings, DatasetMeta
@@ -61,6 +62,13 @@ def _profile_data_quality(
         anomaly_result=anomaly_result,
         mechs=mechs,
         artifact_dir=out,
+        artifact_prefix=artifact_prefix,
+    )
+    findings = attach_diagnostic_charts(
+        findings,
+        df,
+        anomaly_result,
+        str(out),
         artifact_prefix=artifact_prefix,
     )
     table = load_calibrator_table()
@@ -145,6 +153,13 @@ def run(
         anomaly_result=anomaly_result,
         mechs=mechs,
         artifact_dir=out,
+        artifact_prefix=_safe_artifact_stem(data_path),
+    )
+    findings = attach_diagnostic_charts(
+        findings,
+        df,
+        anomaly_result,
+        str(out),
         artifact_prefix=_safe_artifact_stem(data_path),
     )
 

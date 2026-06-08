@@ -173,6 +173,11 @@ class TestSchemaIntegration:
         assert Path(result["l4_report_path"]).exists()
         assert Path(result["guardrail_path"]).exists()
         assert "schema_path" not in result
+        dq = json.loads(Path(result["dq_path"]).read_text())
+        outlier = next((a for a in dq["anomalies"] if a["issue_type"] == "OUTLIER_ENSEMBLE"), None)
+        if outlier is not None:
+            assert outlier["diagnostic_chart"]
+            assert Path(outlier["diagnostic_chart"]).exists()
 
     def test_pipeline_accepts_excel_input(self, clean_csv_path, tmp_path):
         import sys

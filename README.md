@@ -76,6 +76,7 @@ Outputs include:
 - `summary_report.md`
 - `l4_report.md`
 - `guardrail_report.json`
+- `*__diagnostic_*.png` when outlier diagnostic charts are available
 - `*__outlier_rows.csv` and `*__duplicate_rows.csv` when full anomaly-row exports are available
 
 Multi-table mode writes `data_quality_findings.json` as a
@@ -90,6 +91,13 @@ Schema relationship inference can be benchmarked against labelled cases:
 
 ```bash
 python scripts/evaluate_schema_relationships.py
+```
+
+Pipeline artifact output, including L3.5 diagnostic charts and anomaly-row
+exports, can be checked with:
+
+```bash
+python scripts/evaluate_pipeline_artifacts.py
 ```
 
 ## Test

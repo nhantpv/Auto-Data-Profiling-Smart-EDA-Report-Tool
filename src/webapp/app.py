@@ -126,7 +126,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         report_path = output_dir / "summary_report.md"
     files = sorted(
         p.name for p in output_dir.iterdir()
-        if p.is_file() and (p.name in KNOWN_OUTPUTS or p.suffix.lower() == ".csv")
+        if p.is_file() and (p.name in KNOWN_OUTPUTS or p.suffix.lower() in {".csv", ".png"})
     )
     raw_error = meta.get("error")
     public_error = None
@@ -371,7 +371,7 @@ def retry_job(job_id: str) -> JSONResponse:
 def get_job_file(job_id: str, file_name: str):
     job_id = _validate_job_id(job_id)
     path = JOBS_DIR / job_id / file_name
-    if file_name not in KNOWN_OUTPUTS and path.suffix.lower() != ".csv":
+    if file_name not in KNOWN_OUTPUTS and path.suffix.lower() not in {".csv", ".png"}:
         raise HTTPException(status_code=404, detail="File not found")
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -379,4 +379,6 @@ def get_job_file(job_id: str, file_name: str):
         return PlainTextResponse(path.read_text(encoding="utf-8"))
     if file_name.endswith(".csv"):
         return FileResponse(path, media_type="text/csv", filename=file_name)
+    if file_name.endswith(".png"):
+        return FileResponse(path, media_type="image/png", filename=file_name)
     return FileResponse(path, media_type="application/json", filename=file_name)

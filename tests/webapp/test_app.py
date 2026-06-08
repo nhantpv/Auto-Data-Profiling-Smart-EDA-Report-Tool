@@ -40,6 +40,7 @@ def _write_outputs(out_dir: str, include_dq: bool = True, include_schema: bool =
     (out / "summary_report.md").write_text("# Smart EDA Summary Report\n\nREADY\n", encoding="utf-8")
     (out / "l4_report.md").write_text("# L4 Guarded EDA Report\n\nREADY\n", encoding="utf-8")
     (out / "guardrail_report.json").write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+    (out / "data__diagnostic_x_y.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 
 
 def _client(tmp_path, monkeypatch):
@@ -93,6 +94,7 @@ def test_single_job_upload_returns_outputs(tmp_path, monkeypatch):
     assert payload["dataset_verdict"]["verdict"] == "READY"
     assert "summary_report.md" in payload["files"]
     assert "l4_report.md" in payload["files"]
+    assert "data__diagnostic_x_y.png" in payload["files"]
     assert payload["guardrail_report"]["status"] == "passed"
     assert "schema_evaluation_findings.json" in payload["files"]
 
