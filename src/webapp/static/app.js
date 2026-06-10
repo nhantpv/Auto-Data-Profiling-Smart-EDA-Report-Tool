@@ -397,6 +397,91 @@ function renderSchemaPanel(payload) {
   return panel;
 }
 
+function basename(path) {
+  return String(path || "").split(/[\\/]/).pop();
+}
+
+function renderCrossTablePanel(payload) {
+  const analysis = payload.cross_table_analysis;
+  if (!analysis) {
+    return null;
+  }
+  const panel = createPanel("Cross-table Analysis", "Safe joined dataset and numeric cross-table correlations.");
+
+  const facts = document.createElement("div");
+  facts.className = "fact-grid";
+  [
+    ["Status", analysis.status || "-"],
+    ["Fact table", analysis.fact_table || "-"],
+    ["Rows", formatInteger(analysis.denormalized_rows)],
+    ["Columns", formatInteger(analysis.denormalized_columns)],
+    ["Analysis rows", formatInteger(analysis.analysis_rows)],
+    ["Deduped rows", formatInteger(analysis.exact_duplicate_rows_removed)],
+  ].forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.appendChild(textEl("span", "", label));
+    item.appendChild(textEl("strong", "", value));
+    facts.appendChild(item);
+  });
+  panel.appendChild(facts);
+
+  const previewName = basename(analysis.preview_csv_path);
+  if (previewName && payload.links?.[previewName]) {
+    const preview = document.createElement("p");
+    preview.className = "sample-note";
+    preview.append("Preview CSV: ");
+    const link = document.createElement("a");
+    link.href = payload.links[previewName];
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = previewName;
+    preview.appendChild(link);
+    panel.appendChild(preview);
+  }
+
+  const joinHeading = textEl("h4", "", "Safe join steps");
+  panel.appendChild(joinHeading);
+  panel.appendChild(makeTable(
+    [
+      { label: "Status", key: "status" },
+      {
+        label: "Relationship",
+        render: (step) => `${step.child_table}.${step.child_column} -> ${step.parent_table}.${step.parent_column}`,
+      },
+      { label: "Rows", render: (step) => `${formatInteger(step.before_rows)} -> ${formatInteger(step.after_rows)}` },
+      { label: "Match", render: (step) => formatPercent(step.match_rate) },
+      { label: "Added cols", render: (step) => formatInteger((step.added_columns || []).length) },
+      { label: "Warnings", render: (step) => (step.warnings || []).join("; ") || "-" },
+    ],
+    analysis.join_steps || [],
+    "No safe join steps emitted."
+  ));
+
+  const corrHeading = textEl("h4", "", "Top numeric correlations");
+  panel.appendChild(corrHeading);
+  panel.appendChild(makeTable(
+    [
+      { label: "Coefficient", render: (corr) => formatDecimal(corr.coefficient, 4) },
+      { label: "Left", key: "left_feature" },
+      { label: "Right", key: "right_feature" },
+      { label: "N", render: (corr) => formatInteger(corr.n) },
+      { label: "Method", key: "method" },
+    ],
+    analysis.correlations || [],
+    "No cross-table numeric correlations passed the MVP filters."
+  ));
+
+  if ((analysis.warnings || []).length) {
+    const warningList = document.createElement("ul");
+    warningList.className = "warning-list";
+    analysis.warnings.slice(0, 8).forEach((warning) => {
+      warningList.appendChild(textEl("li", "", warning));
+    });
+    panel.appendChild(warningList);
+  }
+  return panel;
+}
+
 function renderChartsPanel(payload) {
   const links = payload.links || {};
   const chartNames = Object.keys(links).filter((name) => name.toLowerCase().endsWith(".png"));
@@ -465,6 +550,7 @@ function renderStructuredResults(payload) {
     renderTopIssuesPanel(payload),
     renderDataQualityPanel(payload),
     renderSchemaPanel(payload),
+    renderCrossTablePanel(payload),
     renderChartsPanel(payload),
     renderArtifactPanel(payload),
   ].filter(Boolean);

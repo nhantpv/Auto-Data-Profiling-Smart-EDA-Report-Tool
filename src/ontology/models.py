@@ -171,3 +171,46 @@ class SchemaEvaluationFindings(BaseModel):
     tables: List[TableInfo]
     integrity_errors: List[IntegrityError] = Field(default_factory=list)
     relationships: List[RelationshipInfo] = Field(default_factory=list)
+
+
+class SafeJoinStep(BaseModel):
+    child_table: str
+    child_column: str
+    parent_table: str
+    parent_column: str
+    status: str
+    before_rows: int
+    after_rows: int
+    parent_rows: int
+    parent_rows_after_dedupe: int
+    parent_key_unique: bool
+    matched_rows: int
+    match_rate: float
+    added_columns: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class CrossTableCorrelation(BaseModel):
+    left_feature: str
+    right_feature: str
+    left_table: str
+    right_table: str
+    method: str
+    coefficient: float
+    abs_coefficient: float
+    n: int
+
+
+class CrossTableAnalysis(BaseModel):
+    schema_version: str = "cross_table_analysis_v1"
+    status: str
+    fact_table: Optional[str] = None
+    denormalized_rows: int = 0
+    denormalized_columns: int = 0
+    analysis_rows: int = 0
+    exact_duplicate_rows_removed: int = 0
+    join_steps: List[SafeJoinStep] = Field(default_factory=list)
+    correlations: List[CrossTableCorrelation] = Field(default_factory=list)
+    excluded_columns: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    preview_csv_path: Optional[str] = None

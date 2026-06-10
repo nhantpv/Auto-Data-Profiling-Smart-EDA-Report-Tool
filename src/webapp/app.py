@@ -30,6 +30,7 @@ ALLOWED_SCHEMA_SUFFIXES = {".dbml", ".sql"}
 KNOWN_OUTPUTS = {
     "data_quality_findings.json",
     "schema_evaluation_findings.json",
+    "cross_table_analysis.json",
     "dataset_verdict.json",
     "summary_report.md",
     "l4_report.md",
@@ -147,6 +148,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "dataset_verdict": _read_json(output_dir / "dataset_verdict.json"),
         "data_quality_findings": _read_json(output_dir / "data_quality_findings.json"),
         "schema_evaluation_findings": _read_json(output_dir / "schema_evaluation_findings.json"),
+        "cross_table_analysis": _read_json(output_dir / "cross_table_analysis.json"),
         "guardrail_report": _read_json(output_dir / "guardrail_report.json"),
         "artifact_manifest": _read_json(output_dir / "artifact_manifest.json"),
         "links": {

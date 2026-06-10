@@ -10,10 +10,14 @@ SRC = Path(__file__).parent / "src"
 sys.path.insert(0, str(SRC))
 
 from ingestion.registry import load_any
+from ingestion.schema_reader import parse_schema
 from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
-from engines.schema_engine import build_schema_findings, validate_schema_multi
+from engines.cross_table_engine import run_cross_table_analysis
+from engines.schema_engine import (
+    build_schema_findings, load_tables, load_tables_by_path, validate_schema_multi,
+)
 from ontology.findings_builder import build_data_quality_findings
 from ontology.models import (
     AnomalyRecord, ArtifactManifest, ArtifactRecord, DataQualityFindings,
@@ -49,6 +53,8 @@ def _table_names_for_paths(data_paths: list) -> list[str]:
 
 
 def _artifact_kind(path: Path) -> str:
+    if path.name == "cross_table_analysis.json":
+        return "cross_table_analysis_json"
     if path.name.endswith("_findings.json"):
         return "findings_json"
     if path.name == "dataset_verdict.json":
@@ -73,6 +79,10 @@ def _artifact_source_layer(path: Path) -> str:
         return "L2_5_SEVERITY"
     if path.name == "guardrail_report.json":
         return "L4_GUARDRAIL"
+    if path.name == "cross_table_analysis.json":
+        return "L4_CROSS_TABLE"
+    if path.name == "cross_table_dataset_preview.csv":
+        return "L4_CROSS_TABLE"
     if path.name in {"summary_report.md", "l4_report.md"}:
         return "L4_REPORTING"
     if path.suffix == ".png":
@@ -106,6 +116,13 @@ def _write_artifact_manifest(out: Path) -> Path:
     manifest_path = out / "artifact_manifest.json"
     manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     return manifest_path
+
+
+def _load_tables_for_cross_analysis(data_paths: list, schema_path: str | None) -> dict:
+    if schema_path:
+        parsed = parse_schema(schema_path)["tables"]
+        return load_tables(data_paths, parsed)
+    return load_tables_by_path(data_paths)
 
 
 def _profile_data_quality(
@@ -328,8 +345,12 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
 
     verdict = aggregate(meta, dq_findings=combined_findings.anomalies, integrity_errors=schema.integrity_errors)
 
+    cross_tables = _load_tables_for_cross_analysis(data_paths, schema_path)
+    cross_table_analysis = run_cross_table_analysis(cross_tables, schema.relationships, out)
+
     dq_path = out / "data_quality_findings.json"
     schema_out = out / "schema_evaluation_findings.json"
+    cross_table_path = out / "cross_table_analysis.json"
     verdict_path = out / "dataset_verdict.json"
     report_path = out / "summary_report.md"
     l4_report_path = out / "l4_report.md"
@@ -344,6 +365,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         encoding="utf-8",
     )
     schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
+    cross_table_path.write_text(cross_table_analysis.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
     report_path.write_text(render_markdown_report(combined_findings, verdict, schema), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
@@ -352,6 +374,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
 
     print(f"data_quality_findings.json       → {dq_path}")
     print(f"schema_evaluation_findings.json → {schema_out}")
+    print(f"cross_table_analysis.json       → {cross_table_path}")
     print(f"dataset_verdict.json            → {verdict_path}")
     print(f"summary_report.md               → {report_path}")
     print(f"l4_report.md                    → {l4_report_path}")
@@ -360,6 +383,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),
+        "cross_table_path": str(cross_table_path),
         "verdict_path": str(verdict_path),
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),

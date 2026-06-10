@@ -263,6 +263,7 @@ class TestMultiTableIntegration:
 
         assert Path(result["dq_path"]).exists()
         assert Path(result["schema_path"]).exists()
+        assert Path(result["cross_table_path"]).exists()
         assert Path(result["verdict_path"]).exists()
         assert Path(result["report_path"]).exists()
         assert Path(result["l4_report_path"]).exists()
@@ -277,3 +278,9 @@ class TestMultiTableIntegration:
         v = json.loads(Path(result["verdict_path"]).read_text())
         assert v["verdict"] == "NOT_READY"
         assert v["summary"]["total_issues"] >= 1
+        cross = json.loads(Path(result["cross_table_path"]).read_text())
+        assert cross["schema_version"] == "cross_table_analysis_v1"
+        assert cross["status"] == "completed"
+        assert cross["fact_table"] == "orders"
+        assert cross["join_steps"][0]["after_rows"] == cross["join_steps"][0]["before_rows"]
+        assert Path(cross["preview_csv_path"]).exists()
