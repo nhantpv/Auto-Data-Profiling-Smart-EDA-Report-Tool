@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Smart EDA Pipeline - Architecture & Workflow</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/reveal.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/theme/dracula.min.css" id="theme">
+    <style>
+        .reveal .slides section {
+            text-align: left;
+            padding: 40px;
+        }
+        .reveal p, .reveal ul {
+            font-size: 1.3em;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+        .reveal h1 { font-size: 2.8em; color: #8be9fd; text-align: center; margin-bottom: 40px; text-transform: none; text-shadow: 0 0 10px rgba(139, 233, 253, 0.3);}
+        .reveal h2 { font-size: 2.0em; color: #ff79c6; border-bottom: 2px solid #6272a4; padding-bottom: 10px; text-transform: none; margin-bottom: 30px;}
+        .reveal h3 { font-size: 1.5em; color: #bd93f9; text-transform: none; margin-top: 20px;}
+        
+        .file-badge {
+            background: rgba(80, 250, 123, 0.15);
+            color: #50fa7b;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9em;
+            border: 1px solid rgba(80, 250, 123, 0.3);
+            display: inline-block;
+            margin: 4px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .io-container {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .io-box {
+            flex: 1;
+            background: rgba(40, 42, 54, 0.9);
+            border: 1px solid #6272a4;
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+            backdrop-filter: blur(5px);
+        }
+        .io-box h4 {
+            margin-top: 0;
+            color: #f1fa8c;
+            font-size: 1.2em;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+        }
+        .io-content {
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.9em;
+            color: #f8f8f2;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        
+        li { margin-bottom: 18px; }
+        .highlight { color: #f1fa8c; font-weight: bold; }
+        .step-num { 
+            display: inline-block; 
+            background: #ff79c6; 
+            color: #282a36; 
+            width: 30px; 
+            height: 30px; 
+            border-radius: 50%; 
+            text-align: center; 
+            line-height: 30px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        
+        /* Premium glassmorphism slide background */
+        .glass-slide {
+            background: rgba(40, 42, 54, 0.7) !important;
+            border-radius: 20px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            padding: 50px 60px !important;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.6) !important;
+            backdrop-filter: blur(12px) !important;
+            width: 100% !important;
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+            
+            <!-- SLIDE 1: TITLE -->
+            <section class="glass-slide" style="text-align: center; padding-top: 100px !important;">
+                <h1>Smart EDA & Data Profiling</h1>
+                <h3 style="color: #f8f8f2;">Kiến trúc Hệ thống & Luồng Dữ liệu Chi tiết</h3>
+                <p style="margin-top: 50px; color: #6272a4; font-size: 0.8em;">Nhấn phím Mũi tên (Space) để chuyển trang</p>
+            </section>
+
+            <!-- SLIDE 2: OVERVIEW -->
+            <section class="glass-slide">
+                <h2>1. Bức Tranh Tổng Thể (The Big Picture)</h2>
+                <p>Toàn bộ pipeline được điều phối bởi tệp <span class="file-badge">run_pipeline.py</span>, đi qua 4 tầng xử lý chính:</p>
+                <ul>
+                    <li><span class="step-num">0</span> <strong>Layer 0: Ingestion</strong> - Đọc dữ liệu & Schema (Bóc tách file).</li>
+                    <li><span class="step-num">1</span> <strong>Layer 1+2: Engines</strong> - Thống kê & Bắt lỗi dị biệt, lỗi thiết kế DB.</li>
+                    <li><span class="step-num">2</span> <strong>Layer 2.5: Severity Stack</strong> - Chẩn đoán mức độ nghiêm trọng (Bệnh nhẹ hay nặng?).</li>
+                    <li><span class="step-num">3</span> <strong>Layer 3: Ontology</strong> - Đóng gói kết quả thành JSON chuẩn mực.</li>
+                </ul>
+            </section>
+
+            <!-- SLIDE 3: INGESTION -->
+            <section class="glass-slide">
+                <h2>2. Layer 0: Data Ingestion (Nạp dữ liệu)</h2>
+                <p>Nhiệm vụ: Chuyển đổi các định dạng file vật lý thành cấu trúc dữ liệu chuẩn để Python xử lý.</p>
+                <ul>
+                    <li><span class="file-badge">src/ingestion/registry.py</span>: Lễ tân điều phối. Tự động nhận diện `.csv`, `.xlsx`, `.parquet`. Tích hợp Smart Sampling (chống tràn RAM).</li>
+                    <li><span class="file-badge">src/ingestion/readers.py</span>: Công nhân đọc file thực tế, tự động fix lỗi font (UTF-8, Latin-1).</li>
+                    <li><span class="file-badge">src/ingestion/schema_reader.py</span>: Adapter Pattern, đọc file bản vẽ `.dbml` hoặc `.sql` (DDL).</li>
+                </ul>
+                <div class="io-container">
+                    <div class="io-box">
+                        <h4>Input</h4>
+                        <div class="io-content">- data.csv, data.xlsx (Dữ liệu)
+- schema.dbml, schema.sql (Bản vẽ)</div>
+                    </div>
+                    <div class="io-box">
+                        <h4>Output</h4>
+                        <div class="io-content">- df: pandas.DataFrame (Bảng thật)
+- schema: UnifiedSchemaResult dict</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SLIDE 4: ENGINES (PROFILING & ANOMALY) -->
+            <section class="glass-slide">
+                <h2>3. Layer 1 & 2: Profiling & Anomaly</h2>
+                <p>Nhiệm vụ: "Khám bệnh" trên bảng dữ liệu để tìm ra các con số thống kê và các dòng dữ liệu dị biệt.</p>
+                <ul>
+                    <li><span class="file-badge">src/engines/profiling_engine.py</span>: Chạy <code>ydata-profiling</code>. Lấy số dòng, số cột, % rỗng, tự tính số dòng trùng lặp (bỏ qua ID).</li>
+                    <li><span class="file-badge">src/engines/anomaly_engine.py</span>: Chạy Hội đồng AI (IForest + ECOD + LOF). Lấy điểm Z-Score tích hợp (Max) để tìm ra <span class="highlight">Outliers</span>.</li>
+                </ul>
+                <div class="io-container">
+                    <div class="io-box">
+                        <h4>Input</h4>
+                        <div class="io-content">- df: pandas.DataFrame</div>
+                    </div>
+                    <div class="io-box">
+                        <h4>Output</h4>
+                        <div class="io-content">- profile_result: dict (Chứa thống kê)
+- anomaly_result: dict (Chứa index dòng rác)</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SLIDE 5: SCHEMA ENGINE -->
+            <section class="glass-slide">
+                <h2>4. Layer 2 (tiếp): Schema Validation</h2>
+                <p>Nhiệm vụ: Đối chiếu dữ liệu thực tế xem có làm đúng thiết kế bản vẽ Database không.</p>
+                <ul>
+                    <li><span class="file-badge">src/engines/schema_engine.py</span>: Trái tim đối chiếu đa bảng.
+                        <ul>
+                            <li>Chạy 7 Validators: Kiểm tra cột thừa/thiếu, sai kiểu dữ liệu, PK bị Null hoặc Trùng.</li>
+                            <li>Chạy Multi-table Check: Soi các bảng với nhau tìm Khóa ngoại mồ côi (Orphan FK).</li>
+                        </ul>
+                    </li>
+                </ul>
+                <div class="io-container">
+                    <div class="io-box">
+                        <h4>Input</h4>
+                        <div class="io-content">- df / list of dfs (Dữ liệu thực tế)
+- schema dict (Từ schema_reader.py)</div>
+                    </div>
+                    <div class="io-box">
+                        <h4>Output</h4>
+                        <div class="io-content">- Danh sách IntegrityError objects
+(Mô tả chi tiết cột sai, số dòng sai)</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SLIDE 6: SEVERITY STACK -->
+            <section class="glass-slide">
+                <h2>5. Layer 2.5: Severity Stack</h2>
+                <p>Nhiệm vụ: Chẩn đoán mức độ nghiêm trọng của từng lỗi (CRITICAL, HIGH, WARN, INFO).</p>
+                <ul>
+                    <li><span class="file-badge">src/severity/missingness.py</span>: Phân loại cơ chế thiếu dữ liệu (MCAR/MAR/MNAR).</li>
+                    <li><span class="file-badge">src/severity/calibrator.py</span>: Tra bảng quy định (Threshold) để dán nhãn mức độ lỗi cho từng cột.</li>
+                    <li><span class="file-badge">src/severity/compound.py</span>: Nâng mức cảnh báo nếu 1 cột dính nhiều lỗi liên tiếp.</li>
+                    <li><span class="file-badge">src/severity/aggregator.py</span>: Phán quyết sinh tử cho toàn bộ Dataset (READY hay NOT_READY).</li>
+                </ul>
+            </section>
+
+            <!-- SLIDE 7: ONTOLOGY & EXPORT -->
+            <section class="glass-slide">
+                <h2>6. Layer 3: Ontology & Export</h2>
+                <p>Nhiệm vụ: Đóng gói toàn bộ kết quả một cách chuẩn mực nhất để gửi cho LLM (Layer 4 sau này).</p>
+                <ul>
+                    <li><span class="file-badge">src/ontology/models.py</span>: Đặc tả hợp đồng Pydantic. Đảm bảo cấu trúc JSON không bao giờ sai lệch. Gắn chuẩn DAMA (Completeness, Validity...).</li>
+                    <li><span class="file-badge">src/ontology/findings_builder.py</span>: Gộp toàn bộ Profile + Anomaly + Missingness thành JSON hoàn chỉnh, trích xuất top 10 dòng lỗi mẫu.</li>
+                    <li><span class="file-badge">src/engines/visualizer.py</span>: (Tích hợp ở Layer 3.5) Tự động vẽ Scatter Plot bôi đỏ điểm Outlier và đính kèm vào báo cáo.</li>
+                </ul>
+            </section>
+
+            <!-- SLIDE 8: RUN PIPELINE -->
+            <section class="glass-slide">
+                <h2>7. Orchestration: run_pipeline.py</h2>
+                <p>Đây là nhạc trưởng điều phối toàn bộ các nhạc công bên trong thư mục `src/`.</p>
+                <ul>
+                    <li><strong>Luồng chính (Hàm run):</strong>
+                        <code>df = load_csv()</code> ➔ 
+                        <code>profile = run_profiling()</code> ➔ 
+                        <code>anomaly = run_anomaly_detection()</code> ➔
+                        <code>mechs = detect_missingness()</code> ➔
+                        <code>findings = build_data_quality_findings()</code> ➔
+                        <code>Write JSON</code>
+                    </li>
+                </ul>
+                <div class="io-container">
+                    <div class="io-box">
+                        <h4>Global Input (Từ Terminal)</h4>
+                        <div class="io-content">python run_pipeline.py data.csv output_dir</div>
+                    </div>
+                    <div class="io-box">
+                        <h4>Global Output (Ra thư mục đĩa)</h4>
+                        <div class="io-content">1. data_quality_findings.json
+2. dataset_verdict.json
+3. schema_evaluation_findings.json (Nếu có)</div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.3.1/reveal.min.js"></script>
+    <script>
+        Reveal.initialize({
+            hash: true,
+            transition: 'convex',
+            backgroundTransition: 'zoom',
+            controls: true,
+            progress: true,
+            center: true,
+            margin: 0.05,
+            width: 1400,
+            height: 850,
+            maxScale: 2.0
+        });
+    </script>
+</body>
+</html>

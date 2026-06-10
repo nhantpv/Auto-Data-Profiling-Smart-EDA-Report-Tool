@@ -12,7 +12,7 @@ Khác biệt hoàn toàn với các tool hiện có trên thị trường, hệ 
 - Hệ thống Guardrail (Allowed-Set + Tolerance) sẽ chủ động quét mọi con số và tên cột trong văn bản LLM, đối chiếu với dữ liệu JSON gốc để chặn Hallucination.
 
 ## 2. Quyết định Chiến lược (Strategic Decisions)
-1. **Hỗ trợ Đa luồng ngay từ v1.0:** Hệ thống không chỉ soi lỗi trên 1 bảng (Single-table CSV), mà còn đối chiếu chéo nhiều bảng với nhau dựa trên bản vẽ thiết kế (DBML). Đây là "vũ khí bí mật" giúp dự án vượt trội hơn các open-source hiện tại.
+1. **Hỗ trợ Đa luồng ngay từ v1.0:** Hệ thống không chỉ soi lỗi trên 1 bảng (Single-table CSV), mà còn đối chiếu chéo nhiều bảng với nhau dựa trên bản vẽ thiết kế database (DBML hoặc SQL DDL). Đây là "vũ khí bí mật" giúp dự án vượt trội hơn các open-source hiện tại.
 2. **Chiến lược Điều phối Mô hình AI (LLM Model Routing):** Tận dụng hệ sinh thái OpenAI. Dùng model dòng `Mini` (rẻ, nhanh, quỹ 2.5M tokens/ngày) cho các tác vụ vụn vặt. Dùng model `High-tier` (thông minh, quỹ 250k tokens/ngày) cho tác vụ tổng hợp cuối cùng.
 3. **Biểu đồ Kép (Dual Visualization):** Kết hợp giữa Biểu đồ tổng quan (Luôn vẽ) và Biểu đồ chẩn đoán (Chỉ vẽ khi có lỗi, do AI ra lệnh).
 
@@ -29,20 +29,23 @@ graph TD
 
     %% INPUT
     subgraph L0 ["Layer 0: Data Ingestion (Đầu vào)"]
-        D1["Data Files (CSV/Excel)"]:::input
-        S1["Schema File (DBML)"]:::input
+        D1["Data Files (CSV/Excel/Parquet)"]:::input
+        S1["Schema File (DBML / SQL DDL)"]:::input
+        SR["Schema Reader (Adapter Pattern)"]:::engine
     end
+
+    S1 --> SR
 
     %% ENGINES (L1 & L2)
     subgraph L1_L2 ["Layer 1 & 2: Deterministic & ML Engines (Bộ máy phân tích)"]
         E1["fg-data-profiling (L1)"]:::engine
         E2["PyOD Anomaly (L2)"]:::engine
-        E3["DBML Validator (L2)"]:::engine
+        E3["Schema Validator (L2)"]:::engine
     end
 
     D1 --> E1
     D1 --> E2
-    D1 & S1 --> E3
+    D1 & SR --> E3
 
     %% SEVERITY STACK (L2.5)
     subgraph L2_5 ["Layer 2.5: Severity Stack (Đánh giá mức độ)"]
@@ -57,6 +60,7 @@ graph TD
     SS1 --> SS2
     SS2 --> SS3
     SS3 --> SS4
+    E3 -.->|"Gửi lỗi cấu trúc"| SS4
 
     %% ONTOLOGY (L3 & L3.5)
     subgraph L3 ["Layer 3 & 3.5: Artifacts & Charts (Đóng gói kết quả)"]
@@ -123,9 +127,13 @@ graph TD
 - **Cách kết hợp (Average Score + Threshold):** Hệ thống dùng `pyod.models.combination.average()` để lấy điểm trung bình của 3 thuật toán. Dòng nào có điểm trung bình vượt ngưỡng (threshold) sẽ bị đánh dấu là rác. Cách này được khuyến nghị bởi benchmark ADBench (NeurIPS 2022) vì linh hoạt và chính xác hơn so với hard voting.
 - **Tính năng Data Export:** Tự động xuất (dump) toàn bộ 100% các dòng dữ liệu dị biệt ra file CSV riêng biệt đính kèm báo cáo để Data Engineer xử lý.
 
-**Nhiệm vụ 2: Kiểm tra chéo giữa các bảng (Multi-table DBML).**
-- **Công nghệ chọn:** Thư viện `pydbml` kết hợp code tự viết bằng `Pandas`.
-- **Tại sao chọn?** Trên thế giới gần như chưa có Tool Open-Source nào xử lý được bài toán này. Ta dùng `pydbml` để đọc file thiết kế, hiểu được khóa ngoại (Foreign Key) nối từ bảng A sang bảng B. Sau đó dùng `Pandas` quét file CSV để kiểm tra xem có dòng dữ liệu nào bị "mồ côi" không. 
+**Nhiệm vụ 2: Kiểm tra chéo giữa các bảng (Multi-table Schema Validation).**
+- **Công nghệ chọn:** Module `schema_reader.py` (Adapter Pattern) + code tự viết bằng `Pandas`.
+- **Hỗ trợ 2 định dạng schema:**
+  - **DBML** (`.dbml`) — Dùng thư viện `pydbml` để parse.
+  - **SQL DDL** (`.sql`) — Dùng thư viện `simple-ddl-parser` để parse. Hỗ trợ DDL export từ PostgreSQL, MySQL, SQL Server, Oracle.
+- **Adapter Pattern:** Cả 2 parser trả về cùng một cấu trúc dict chuẩn hóa (`UnifiedSchemaResult`), nhờ đó toàn bộ logic kiểm tra phía sau (7 validators + FK check) **không cần phân biệt** file đầu vào là `.dbml` hay `.sql`.
+- **Tại sao chọn?** Trên thế giới gần như chưa có Tool Open-Source nào xử lý được bài toán này. Hệ thống đọc file thiết kế, hiểu được khóa ngoại (Foreign Key) nối từ bảng A sang bảng B, sau đó dùng `Pandas` quét file CSV để kiểm tra xem có dòng dữ liệu nào bị "mồ côi" không.
 
 ### Layer 2.5: Severity Stack (Đánh giá mức độ nghiêm trọng)
 **Nhiệm vụ:** Nhận kết quả thô từ L1 & L2, phân tích sâu hơn và gán mức độ nghiêm trọng trước khi đóng gói JSON.
@@ -171,21 +179,22 @@ graph TD
 Để hiện thực hóa kiến trúc trên, dự án sẽ được code theo 4 giai đoạn:
 
 ### Phase 1: Xây dựng Bộ máy Cốt lõi (Core Engines - L1 & L2)
-- `[ ]` Viết module `ingestion`: Code đọc file CSV, Excel và parse file `.dbml`.
-- `[ ]` Viết module `profiling_engine`: Tích hợp `ydata-profiling`.
-- `[ ]` Viết module `anomaly_engine`: Tích hợp `PyOD` (Isolation Forest + ECOD + LOF Ensemble).
-- `[ ]` Viết module `schema_engine`: Logic kiểm tra Khóa ngoại (Foreign Key) giữa các DataFrames.
+- `[x]` Viết module `ingestion`: Code đọc file CSV, Excel, Parquet và parse file `.dbml` / `.sql`.
+- `[x]` Viết module `profiling_engine`: Tích hợp `ydata-profiling`.
+- `[x]` Viết module `anomaly_engine`: Tích hợp `PyOD` (Isolation Forest + ECOD + LOF Ensemble).
+- `[x]` Viết module `schema_engine`: Logic kiểm tra Khóa ngoại (Foreign Key) giữa các DataFrames.
+- `[x]` Viết module `schema_reader`: Adapter Pattern hỗ trợ đọc cả `.dbml` lẫn `.sql` DDL.
 
 ### Phase 2: Chuẩn hóa Đầu ra + Severity Stack (L2.5 & L3)
-- `[ ]` Định nghĩa Pydantic models với C1 fields (`dq_dimensions`, `ml_impact`, `compound_severity`, `confidence`) cho 3 file JSON.
-- `[ ]` Viết module `severity/calibrator.py`: Tra bảng `calibrator_table.json` (đặt tay v0.1).
-- `[ ]` Viết module `severity/missingness.py`: MCAR/MAR/MNAR detector.
-- `[ ]` Viết module `severity/compound.py`: CompoundEscalator.
-- `[ ]` Viết module `severity/aggregator.py`: Dataset Verdict (READY/WARN/NOT_READY).
-- `[ ]` Viết module `findings_builder.py`: Gom L1 + L2 + L2.5 → xuất 3 file JSON chuẩn.
+- `[x]` Định nghĩa Pydantic models với C1 fields (`dq_dimensions`, `ml_impact`, `compound_severity`, `confidence`) cho 3 file JSON.
+- `[x]` Viết module `severity/calibrator.py`: Tra bảng `calibrator_table.json` (đặt tay v0.1).
+- `[x]` Viết module `severity/missingness.py`: MCAR/MAR/MNAR detector.
+- `[x]` Viết module `severity/compound.py`: CompoundEscalator.
+- `[x]` Viết module `severity/aggregator.py`: Dataset Verdict (READY/WARN/NOT_READY).
+- `[x]` Viết module `findings_builder.py`: Gom L1 + L2 + L2.5 → xuất 3 file JSON chuẩn.
 
 ### Phase 3: Biểu đồ (Visualization - L3.5)
-- `[ ]` Viết module `visualizer`: Hàm vẽ Overview Charts (trích xuất từ ydata).
+- `[x]` Viết module `visualizer`: Hàm vẽ Diagnostic Charts (scatter plot bôi đỏ outliers).
 - `[ ]` Viết logic Chart Architect: Parse lệnh vẽ biểu đồ chẩn đoán từ Agent.
 
 ### Phase 4: Xây dựng Đội ngũ AI + Guardrail (L4)
@@ -201,36 +210,44 @@ graph TD
 
 ---
 
-## 6. Thiết kế Mã nguồn (Plugin/Modular Design)
-Để đảm bảo dễ bảo trì và mở rộng, mã nguồn sẽ được chia thành các thư mục độc lập (Plugin-based):
+## 6. Thiết kế Mã nguồn — Cấu trúc thực tế (Source Code Layout)
+Mã nguồn được chia thành các package độc lập theo nguyên tắc **Single Responsibility**. Dưới đây là cấu trúc **thực tế hiện tại** (các thư mục chưa có code đánh dấu `[PLANNED]`):
 ```text
 src/
-├── ingestion/               # Các Plugin đọc dữ liệu (Output luôn là Pandas DataFrame)
-│   ├── csv_reader.py
-│   ├── excel_reader.py
-│   └── dbml_parser.py       # Dùng pydbml
-├── engines/                 # Core logic xử lý (L1 & L2)
-│   ├── profiling_engine.py  # Wrap ydata-profiling (Layer 1)
-│   ├── anomaly_engine.py    # Wrap PyOD (Layer 2)
-│   └── schema_engine.py     # Đối chiếu DataFrame vs DBML (Layer 2)
-├── severity/                # Layer 2.5: Severity Stack (C2)
+├── ingestion/                # Layer 0: Đọc dữ liệu + Schema
+│   ├── base.py              # Protocol interface (DataReader)
+│   ├── readers.py           # CSVReader, ExcelReader, ParquetReader
+│   ├── csv_reader.py        # Hàm load_csv() — entry point chính
+│   ├── registry.py          # Auto-detect format + load_any()
+│   ├── sampling.py          # Smart Sampling (>500k dòng → lấy mẫu)
+│   └── schema_reader.py     # ★ Adapter Pattern: parse .dbml / .sql DDL
+│
+├── engines/                  # Layer 1 & 2: Core Engines
+│   ├── profiling_engine.py  # Wrap fg-data-profiling (Layer 1)
+│   ├── anomaly_engine.py    # PyOD Ensemble: IForest + ECOD + LOF (Layer 2)
+│   ├── schema_engine.py     # 7 validators + FK check (Layer 2)
+│   └── visualizer.py        # Diagnostic scatter charts (Layer 3.5)
+│
+├── severity/                 # Layer 2.5: Severity Stack
 │   ├── calibrator.py        # Tra bảng calibrator_table.json
 │   ├── missingness.py       # MCAR/MAR/MNAR detector
 │   ├── compound.py          # CompoundEscalator
-│   ├── aggregator.py        # Dataset Verdict (READY/WARN/NOT_READY)
-│   └── calibrator_table.json  # Bảng ngưỡng đặt tay v0.1
-├── ontology/                # Định nghĩa cấu trúc file JSON (Layer 3)
-│   ├── models.py            # Pydantic models với C1 fields (DAMA, ml_impact, compound_severity)
-│   ├── findings_builder.py  # Gom L1 + L2 + L2.5 → JSON chuẩn
-│   └── exporters.py         # Xuất ra JSON/YAML
-├── guardrail/               # Layer 4 Guardrail (C3)
-│   ├── validator.py         # Allowed-Set builder + Regex + tolerance matcher
-│   ├── column_checker.py    # Column-name hallucination check
-│   └── policy.py            # Retry policy, tolerance config
-└── reporting/               # Lớp LLM (Layer 4)
-    ├── visualizer.py        # Vẽ biểu đồ (Overview & Diagnostic)
-    ├── prompts/             # Template cho các AI Agents
-    └── agents/              # Chart Architect, Mini Agents, Master Agent
+│   └── aggregator.py        # Dataset Verdict (READY/WARN/NOT_READY)
+│
+├── ontology/                 # Layer 3: Structured Findings
+│   ├── models.py            # Pydantic models (15 classes)
+│   └── findings_builder.py  # Gom L1 + L2 + L2.5 → JSON chuẩn
+│
+├── guardrail/                # [PLANNED] Layer 4 Guardrail (C3)
+│   └── (chưa triển khai)    # Allowed-Set, Column-name check, Retry policy
+│
+└── reporting/                # [PLANNED] Layer 4 LLM Agents
+    └── (chưa triển khai)    # Chart Architect, Mini Agents, Master Agent
+
+config/
+└── calibrator_table.json     # Bảng ngưỡng severity đặt tay v0.1
+
+run_pipeline.py               # CLI entry point — điều phối toàn bộ pipeline
 ```
 
 ## 7. Kế hoạch Kiểm thử (Verification Plan)
@@ -256,3 +273,91 @@ src/
 
 ### 8.3. Ontology Contract (Đặc tả API)
 - Để đảm bảo nhóm Mini Agents không bị loạn, cấu trúc JSON giữa L2 và L3 sẽ được quản lý khắt khe bằng Pydantic. Mọi chi tiết về Schema sẽ không nằm trong tài liệu này mà được đặc tả riêng tại `docs/schema_definitions.md` (Sẽ triển khai ở Phase 2).
+
+---
+
+## 9. Tham chiếu Chi tiết Mã nguồn (Source Code Reference)
+
+Phần này mô tả **chức năng cụ thể** của từng file trong `src/`, giúp thành viên mới hiểu nhanh vai trò và mối quan hệ giữa các module.
+
+### 9.1. `ingestion/` — Lớp Đọc Dữ liệu (Layer 0)
+
+| File | Dòng | Chức năng |
+|:---|:---:|:---|
+| `base.py` | 8 | Định nghĩa `DataReader` Protocol — interface chung cho tất cả reader. Mọi reader mới chỉ cần implement `suffixes` và `read()`. |
+| `readers.py` | 27 | 3 reader cụ thể: `CSVReader` (thử 3 encoding: utf-8, utf-8-sig, latin-1), `ExcelReader` (.xlsx/.xls qua openpyxl), `ParquetReader` (.parquet qua pyarrow). |
+| `csv_reader.py` | 11 | Hàm `load_csv()` — entry point chính cho pipeline. Gọi `CSVReader` rồi tự động áp dụng Smart Sampling nếu dataset lớn. |
+| `registry.py` | 25 | Hàm `load_any()` — auto-detect format file bằng extension rồi dispatch tới reader phù hợp. Hỗ trợ mở rộng: thêm reader mới chỉ cần thêm vào list `_READERS`. |
+| `sampling.py` | 12 | Hàm `sample_if_large()` — nếu DataFrame >500.000 dòng, lấy mẫu ngẫu nhiên xuống 500k để tránh OOM. Ngưỡng có thể tùy chỉnh qua tham số. |
+| `schema_reader.py` | 209 | ★ **Module mới nhất.** Adapter Pattern cho schema ingestion. Hàm `parse_schema()` auto-detect `.dbml`/`.sql` rồi delegate tới adapter tương ứng. Output chuẩn hóa: `{"tables": {...}, "refs": [...], "meta": {...}}`. |
+
+> **Adapter Pattern trong `schema_reader.py`:**
+> ```
+>   .dbml  ──→  _parse_dbml()   [pydbml]     ──┐
+>                                                ├→  UnifiedSchemaResult
+>   .sql   ──→  _parse_sql_ddl() [DDLParser]  ──┘
+> ```
+> `_parse_dbml()` trích xuất tables + refs từ pydbml objects.
+> `_parse_sql_ddl()` xử lý 3 kiểu FK: inline REFERENCES, table-level FOREIGN KEY, ALTER TABLE ADD FOREIGN KEY.
+>
+> **Sự khác biệt cốt lõi giữa `registry.py` và `schema_reader.py`:**
+> *   **`registry.py` (Bộ nạp Dữ liệu thô):** Xử lý các tệp chứa **dữ liệu thực tế** (CSV, Excel, Parquet). Nó tự động nhận diện đuôi file để gọi đúng Reader thích hợp, đưa dữ liệu thô vào bộ nhớ RAM dưới dạng bảng Pandas DataFrame để các Engine tính toán thống kê và chạy AI.
+> *   **`schema_reader.py` (Bộ nạp Bản vẽ thiết kế):** Xử lý các tệp chứa **cấu trúc thiết kế** cơ sở dữ liệu (DBML hoặc câu lệnh SQL DDL). Nó không đọc dữ liệu thô, mà đọc quy định cấu trúc (tên bảng, tên cột, ràng buộc khóa chính/khóa ngoại) để trả về một cấu trúc JSON chuẩn hóa chung (`UnifiedSchemaResult`). Cấu trúc này làm mốc đối chiếu cho Schema Engine kiểm tra lỗi thiết kế.
+
+---
+
+### 9.2. `engines/` — Bộ máy Phân tích (Layer 1 & 2)
+
+| File | Dòng | Chức năng |
+|:---|:---:|:---|
+| `profiling_engine.py` | 25 | Wrap `fg-data-profiling` (trước là ydata-profiling). Hàm `run_profiling()` nhận DataFrame, trả về dict chứa `table` (meta thống kê) + `variables` (chi tiết từng cột). Bổ sung đếm duplicate rows nếu thư viện không trả. |
+| `anomaly_engine.py` | 103 | PyOD Ensemble: Chạy 3 model (IForest, ECOD, LOF), combine bằng **Max Z-score** (thay vì Average — robust hơn với LOF sign-inversion). Dòng nào có ensemble z-score ≥ 3.0 bị đánh dấu outlier. Trả về `outlier_indices`, `anomaly_scores` (sigmoid-normalized), `n_outliers`. |
+| `schema_engine.py` | 308 | Engine lớn nhất (~308 dòng). Chứa **7 single-table validators** (MISSING_COLUMN, EXTRA_COLUMN, TYPE_MISMATCH, PK_DUPLICATE, PK_NULL, NOT_NULL_VIOLATION, UNIQUE_VIOLATION) + **FK orphan check** (multi-table). Gọi `parse_schema()` từ `schema_reader.py` — không import trực tiếp pydbml. |
+| `visualizer.py` | 56 | Vẽ biểu đồ chẩn đoán scatter plot (2 cột numeric có variance cao nhất). Điểm outlier bôi đỏ, điểm normal xám. Hàm `attach_diagnostic_charts()` gắn đường dẫn ảnh vào `AnomalyRecord.diagnostic_chart`. |
+
+> **7 Validators trong `schema_engine.py`:**
+> 1. `MISSING_COLUMN` — Cột có trong schema nhưng thiếu trong CSV → **CRITICAL**
+> 2. `EXTRA_COLUMN` — Cột có trong CSV nhưng không có trong schema → **INFO**
+> 3. `TYPE_MISMATCH` — Kiểu dữ liệu thực tế khác kiểu khai báo → **HIGH**
+> 4. `PK_DUPLICATE` — Giá trị khóa chính bị trùng → **CRITICAL**
+> 5. `PK_NULL` — Khóa chính chứa giá trị null → **CRITICAL**
+> 6. `NOT_NULL_VIOLATION` — Cột `NOT NULL` nhưng có null → **HIGH**
+> 7. `UNIQUE_VIOLATION` — Cột `UNIQUE` nhưng có giá trị trùng → **HIGH**
+
+---
+
+### 9.3. `severity/` — Đánh giá Mức độ (Layer 2.5)
+
+| File | Dòng | Chức năng |
+|:---|:---:|:---|
+| `calibrator.py` | ~100 | Tra bảng `calibrator_table.json` để gán severity cho từng cột dựa trên `p_missing`, `p_zeros`, `n_distinct`. Hàm `calibrate_columns()` trả về list `AnomalyRecord` cho các cột có vấn đề. |
+| `missingness.py` | ~120 | Phân loại cơ chế thiếu dữ liệu: **MCAR** (ngẫu nhiên hoàn toàn), **MAR** (phụ thuộc cột khác), **MNAR** (phụ thuộc chính giá trị bị thiếu). Dùng Little's test (chi-square) + Logistic Regression AUC. |
+| `compound.py` | ~30 | CompoundEscalator: Nếu 1 cột dính nhiều lỗi cùng lúc → nâng `compound_severity` lên 1 bậc mỗi lỗi thêm, cap ở CRITICAL. |
+| `aggregator.py` | ~40 | Tổng hợp tất cả lỗi → phán quyết dataset: `READY` (≤3 WARN, 0 CRITICAL/HIGH), `WARN` (có HIGH nhưng 0 CRITICAL), `NOT_READY` (có CRITICAL). Xuất `DatasetVerdict`. |
+
+---
+
+### 9.4. `ontology/` — Cấu trúc Dữ liệu (Layer 3)
+
+| File | Dòng | Chức năng |
+|:---|:---:|:---|
+| `models.py` | 111 | **15 Pydantic models** định nghĩa schema cho 3 file JSON output: `DataQualityFindings` (meta + columns + anomalies), `SchemaEvaluationFindings` (schema_meta + tables + integrity_errors), `DatasetVerdict` (verdict + rationale + summary). Chuẩn DAMA-DMBOK. |
+| `findings_builder.py` | 140 | Hàm `build_data_quality_findings()` — gom kết quả từ profiling + anomaly + missingness → tạo object `DataQualityFindings` hoàn chỉnh. Tự tra calibrator table để gán severity cho outlier/duplicate records. |
+
+---
+
+### 9.5. `run_pipeline.py` — Điều phối Pipeline (Entry Point)
+
+File gốc nằm ở root project (không trong `src/`). Có 2 mode:
+- **Single-table:** `run(csv_path, out_dir, schema_path=None)` → chạy full pipeline L1→L2→L2.5→L3, xuất 2-3 file JSON.
+- **Multi-table:** `run_multi(csv_paths, out_dir, schema_path)` → chạy schema validation + FK check, xuất `schema_evaluation_findings.json` + `dataset_verdict.json`.
+
+**CLI:**
+```bash
+# Single-table (có hoặc không có schema)
+python run_pipeline.py data.csv output/ schema.dbml
+python run_pipeline.py data.csv output/ schema.sql
+
+# Multi-table (bắt buộc có schema)
+python run_pipeline.py --multi users.csv orders.csv --schema shop.sql --out output/
+```

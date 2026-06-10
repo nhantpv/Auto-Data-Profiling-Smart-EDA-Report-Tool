@@ -3,3 +3,4 @@ demo_ydata
 output*
 __pycache__/
 *.pyc
+*.csv
