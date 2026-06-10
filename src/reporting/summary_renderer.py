@@ -28,6 +28,17 @@ def _schema_rows(schema: SchemaEvaluationFindings | None) -> list[str]:
     return rows
 
 
+def _top_issue_rows(verdict: DatasetVerdict) -> list[str]:
+    rows = []
+    for issue in verdict.top_issues:
+        scope = issue.affected_column or issue.affected_table or "dataset"
+        rows.append(
+            f"| {issue.effective_severity.value} | {issue.issue_type} | {scope} | "
+            f"{issue.affected_count} | {issue.rationale} |"
+        )
+    return rows
+
+
 def render_markdown_report(
     findings: DataQualityFindings | None,
     verdict: DatasetVerdict,
@@ -50,6 +61,26 @@ def render_markdown_report(
         f"- Duplicate rows: {meta.n_duplicates} ({_pct(meta.p_duplicates)})",
         "",
     ]
+    if meta.is_sampled:
+        lines.extend([
+            "## Sampling",
+            "",
+            f"- Original rows: {meta.original_n}",
+            f"- Sample rows used by profiling: {meta.sample_n}",
+            f"- Method: {meta.sample_method}",
+            f"- Seed: {meta.sample_seed}",
+            "",
+        ])
+
+    if verdict.top_issues:
+        lines.extend([
+            "## Top Issues Driving Verdict",
+            "",
+            "| Effective Severity | Type | Scope | Affected Rows | Rationale |",
+            "| --- | --- | --- | --- | --- |",
+        ])
+        lines.extend(_top_issue_rows(verdict))
+        lines.append("")
 
     if findings is not None:
         lines.extend([

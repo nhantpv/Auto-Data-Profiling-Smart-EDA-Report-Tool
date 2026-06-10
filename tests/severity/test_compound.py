@@ -33,8 +33,7 @@ class TestApplyCompoundSingleFinding:
 
 
 class TestApplyCompoundEscalation:
-    def test_two_findings_on_same_column_escalate_by_one(self):
-        # age: HIGH + WARN → compound HIGH+1 = CRITICAL
+    def test_high_warn_on_same_column_stays_high(self):
         findings = [
             _rec("OUTLIER_ENSEMBLE", "HIGH", "age"),
             _rec("MISSINGNESS", "WARN", "age"),
@@ -42,10 +41,9 @@ class TestApplyCompoundEscalation:
         result = apply_compound(findings)
         for f in result:
             if f.affected_column == "age":
-                assert f.compound_severity == Severity.CRITICAL
+                assert f.compound_severity == Severity.HIGH
 
-    def test_three_findings_escalate_by_two(self):
-        # col: WARN + WARN + WARN → max=WARN, idx=1, +2 = idx 3 = CRITICAL
+    def test_multiple_warn_findings_escalate_to_high(self):
         findings = [
             _rec("MISSINGNESS", "WARN", "x"),
             _rec("IMBALANCE", "WARN", "x"),
@@ -53,7 +51,7 @@ class TestApplyCompoundEscalation:
         ]
         result = apply_compound(findings)
         for f in result:
-            assert f.compound_severity == Severity.CRITICAL
+            assert f.compound_severity == Severity.HIGH
 
     def test_escalation_caps_at_critical(self):
         # col: CRITICAL + CRITICAL → stays CRITICAL (can't go higher)
@@ -67,7 +65,6 @@ class TestApplyCompoundEscalation:
                 assert f.compound_severity == Severity.CRITICAL
 
     def test_different_columns_escalated_independently(self):
-        # col_a: 1 finding → WARN; col_b: 2 findings → HIGH escalates to CRITICAL
         findings = [
             _rec("MISSINGNESS", "WARN", "col_a"),
             _rec("MISSINGNESS", "HIGH", "col_b"),
@@ -78,10 +75,9 @@ class TestApplyCompoundEscalation:
         col_b = [f for f in result if f.affected_column == "col_b"]
         assert col_a[0].compound_severity == Severity.WARN
         for f in col_b:
-            assert f.compound_severity == Severity.CRITICAL
+            assert f.compound_severity == Severity.HIGH
 
     def test_multivariate_alongside_column_findings(self):
-        # OUTLIER_ENSEMBLE stays at severity, col finding escalates normally
         findings = [
             _rec("OUTLIER_ENSEMBLE", "HIGH", None),
             _rec("MISSINGNESS", "WARN", "bmi"),
@@ -92,4 +88,15 @@ class TestApplyCompoundEscalation:
         assert outlier.compound_severity == Severity.HIGH
         bmi = [f for f in result if f.affected_column == "bmi"]
         for f in bmi:
-            assert f.compound_severity == Severity.CRITICAL
+            assert f.compound_severity == Severity.HIGH
+
+    def test_info_does_not_escalate_column(self):
+        findings = [
+            _rec("PROFILE_NOTE", "INFO", "age"),
+            _rec("MISSINGNESS", "HIGH", "age"),
+        ]
+        result = apply_compound(findings)
+        info = next(f for f in result if f.issue_type == "PROFILE_NOTE")
+        high = next(f for f in result if f.issue_type == "MISSINGNESS")
+        assert info.compound_severity == Severity.INFO
+        assert high.compound_severity == Severity.HIGH

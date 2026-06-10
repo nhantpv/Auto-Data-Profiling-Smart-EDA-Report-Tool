@@ -12,7 +12,7 @@ def test_schema_relationship_eval_spec_scores_inferred_school_links():
 
     result = evaluate_relationship_cases(spec, project_root=project_root)
 
-    assert result["summary"]["cases"] == 1
+    assert result["summary"]["cases"] == 3
     assert result["summary"]["precision"] == 1.0
     assert result["summary"]["recall"] == 1.0
     assert result["summary"]["f1"] == 1.0

@@ -83,6 +83,15 @@ class TestAggregateVerdictSummary:
         v = aggregate(_meta(), [_rec("WARN")], integrity_errors=None)
         assert v.verdict == Verdict.READY
 
+    def test_top_issues_sorted_by_effective_severity(self):
+        v = aggregate(_meta(), [
+            _rec("WARN", col="status"),
+            _rec("HIGH", col="amount"),
+        ])
+        assert [issue.affected_column for issue in v.top_issues[:2]] == ["amount", "status"]
+        assert v.top_issues[0].detail_ref is not None
+        assert v.top_issues[0].detail_ref.file == "data_quality_findings.json"
+
 
 class TestAggregateRationale:
     def test_rationale_mentions_verdict(self):

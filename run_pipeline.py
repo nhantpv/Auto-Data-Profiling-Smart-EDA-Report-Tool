@@ -15,7 +15,10 @@ from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from engines.schema_engine import build_schema_findings, validate_schema_multi
 from ontology.findings_builder import build_data_quality_findings
-from ontology.models import AnomalyRecord, DataQualityFindings, DatasetMeta
+from ontology.models import (
+    AnomalyRecord, ArtifactManifest, ArtifactRecord, DataQualityFindings,
+    DatasetMeta,
+)
 from severity.calibrator import calibrate_columns, load_calibrator_table
 from severity.compound import apply_compound
 from severity.aggregator import aggregate
@@ -43,6 +46,66 @@ def _table_names_for_paths(data_paths: list) -> list[str]:
         used.add(name)
         names.append(name)
     return names
+
+
+def _artifact_kind(path: Path) -> str:
+    if path.name.endswith("_findings.json"):
+        return "findings_json"
+    if path.name == "dataset_verdict.json":
+        return "verdict_json"
+    if path.name == "guardrail_report.json":
+        return "guardrail_json"
+    if path.suffix == ".md":
+        return "report_markdown"
+    if path.suffix == ".png":
+        return "diagnostic_chart"
+    if path.suffix == ".csv":
+        return "row_export"
+    return "artifact"
+
+
+def _artifact_source_layer(path: Path) -> str:
+    if path.name == "data_quality_findings.json":
+        return "L3_ONTOLOGY"
+    if path.name == "schema_evaluation_findings.json":
+        return "L2_SCHEMA"
+    if path.name == "dataset_verdict.json":
+        return "L2_5_SEVERITY"
+    if path.name == "guardrail_report.json":
+        return "L4_GUARDRAIL"
+    if path.name in {"summary_report.md", "l4_report.md"}:
+        return "L4_REPORTING"
+    if path.suffix == ".png":
+        return "L3_5_CHARTS"
+    if path.suffix == ".csv":
+        return "L3_ARTIFACT_EXPORT"
+    return "PIPELINE"
+
+
+def _write_artifact_manifest(out: Path) -> Path:
+    artifacts = []
+    used_ids: set[str] = set()
+    for path in sorted(out.iterdir()):
+        if not path.is_file() or path.name == "artifact_manifest.json":
+            continue
+        artifact_id = _safe_artifact_stem(path.name)
+        if artifact_id in used_ids:
+            index = 2
+            base = artifact_id
+            while artifact_id in used_ids:
+                artifact_id = f"{base}_{index}"
+                index += 1
+        used_ids.add(artifact_id)
+        artifacts.append(ArtifactRecord(
+            artifact_id=artifact_id,
+            kind=_artifact_kind(path),
+            path=path.name,
+            source_layer=_artifact_source_layer(path),
+        ))
+    manifest = ArtifactManifest(artifacts=artifacts)
+    manifest_path = out / "artifact_manifest.json"
+    manifest_path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
+    return manifest_path
 
 
 def _profile_data_quality(
@@ -74,6 +137,7 @@ def _profile_data_quality(
     table = load_calibrator_table()
     col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
     all_dq = apply_compound(findings.anomalies + col_findings)
+    findings.anomalies = all_dq
     return findings, all_dq
 
 
@@ -166,6 +230,7 @@ def run(
     table = load_calibrator_table()
     col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
     all_dq = apply_compound(findings.anomalies + col_findings)
+    findings.anomalies = all_dq
 
     # Schema path (optional)
     integrity_errors = None
@@ -192,18 +257,21 @@ def run(
     report_path.write_text(render_markdown_report(findings, verdict, schema), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
     guardrail_path.write_text(guardrail_report.model_dump_json(indent=2), encoding="utf-8")
+    artifact_manifest_path = _write_artifact_manifest(out)
 
     print(f"data_quality_findings.json → {dq_path}")
     print(f"dataset_verdict.json       → {verdict_path}")
     print(f"summary_report.md          → {report_path}")
     print(f"l4_report.md               → {l4_report_path}")
     print(f"guardrail_report.json      → {guardrail_path}")
+    print(f"artifact_manifest.json     → {artifact_manifest_path}")
     output_paths.update({
         "dq_path": str(dq_path),
         "verdict_path": str(verdict_path),
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),
         "guardrail_path": str(guardrail_path),
+        "artifact_manifest_path": str(artifact_manifest_path),
     })
     return output_paths
 
@@ -224,18 +292,17 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         for table_name, path in zip(table_names, data_paths)
     }
     table_findings: dict[str, DataQualityFindings] = {}
-    all_dq = []
     for table_name, path in zip(table_names, data_paths):
-        findings, dq_findings = _profile_data_quality(
+        findings, _dq_findings = _profile_data_quality(
             str(path),
             out,
             artifact_prefix=table_name,
             profiling_minimal=True,
         )
         table_findings[table_name] = findings
-        all_dq.extend(dq_findings)
 
     total_n = sum(f.dataset_meta.n for f in table_findings.values())
+    total_original_n = sum(f.dataset_meta.original_n or f.dataset_meta.n for f in table_findings.values())
     total_vars = sum(f.dataset_meta.n_var for f in table_findings.values())
     total_cells = sum(f.dataset_meta.n * f.dataset_meta.n_var for f in table_findings.values())
     missing_cells = sum(
@@ -251,10 +318,15 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         p_cells_missing=round(missing_cells / total_cells, 6) if total_cells else 0.0,
         n_duplicates=total_duplicates,
         p_duplicates=round(total_duplicates / total_n, 6) if total_n else 0.0,
+        is_sampled=any(f.dataset_meta.is_sampled for f in table_findings.values()),
+        original_n=total_original_n,
+        sample_n=total_n,
+        sample_method="per_table_random" if any(f.dataset_meta.is_sampled for f in table_findings.values()) else None,
+        sample_seed=42 if any(f.dataset_meta.is_sampled for f in table_findings.values()) else None,
     )
     combined_findings = _combine_multi_findings(table_findings, meta)
 
-    verdict = aggregate(meta, dq_findings=all_dq, integrity_errors=schema.integrity_errors)
+    verdict = aggregate(meta, dq_findings=combined_findings.anomalies, integrity_errors=schema.integrity_errors)
 
     dq_path = out / "data_quality_findings.json"
     schema_out = out / "schema_evaluation_findings.json"
@@ -276,6 +348,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     report_path.write_text(render_markdown_report(combined_findings, verdict, schema), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
     guardrail_path.write_text(guardrail_report.model_dump_json(indent=2), encoding="utf-8")
+    artifact_manifest_path = _write_artifact_manifest(out)
 
     print(f"data_quality_findings.json       → {dq_path}")
     print(f"schema_evaluation_findings.json → {schema_out}")
@@ -283,6 +356,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     print(f"summary_report.md               → {report_path}")
     print(f"l4_report.md                    → {l4_report_path}")
     print(f"guardrail_report.json           → {guardrail_path}")
+    print(f"artifact_manifest.json          → {artifact_manifest_path}")
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),
@@ -290,6 +364,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),
         "guardrail_path": str(guardrail_path),
+        "artifact_manifest_path": str(artifact_manifest_path),
     }
 
 

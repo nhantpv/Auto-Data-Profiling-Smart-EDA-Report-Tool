@@ -36,6 +36,8 @@
     "customers": "customer",
     "user": "user",
     "users": "user",
+    "buyer": "user",
+    "seller": "user",
     "order": "order",
     "orders": "order",
     "product": "product",

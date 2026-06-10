@@ -117,6 +117,7 @@ def build_data_quality_findings(
     artifact_prefix: str | None = None,
 ) -> DataQualityFindings:
     table = profile_result.get("table", {})
+    sampling = df.attrs.get("sampling", {})
 
     meta = DatasetMeta(
         file_name=file_name,
@@ -126,6 +127,11 @@ def build_data_quality_findings(
         p_cells_missing=float(table.get("p_cells_missing", 0.0)),
         n_duplicates=int(table.get("n_duplicates", 0)),
         p_duplicates=float(table.get("p_duplicates", 0.0)),
+        is_sampled=bool(sampling.get("is_sampled", False)),
+        original_n=sampling.get("original_n"),
+        sample_n=sampling.get("sample_n"),
+        sample_method=sampling.get("sample_method"),
+        sample_seed=sampling.get("sample_seed"),
     )
 
     if mechs is None:

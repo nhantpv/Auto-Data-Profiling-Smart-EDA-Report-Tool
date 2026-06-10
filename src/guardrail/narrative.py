@@ -101,14 +101,35 @@ def build_narrative_evidence(
             meta.n_var,
             meta.memory_size,
             meta.n_duplicates,
+            meta.original_n,
+            meta.sample_n,
+            meta.sample_seed,
             verdict.summary.total_issues,
             verdict.summary.critical,
             verdict.summary.high,
             verdict.summary.warn,
             verdict.summary.info,
+            verdict.risk_score,
         ],
     )
     _add_percents(numbers, [meta.p_cells_missing, meta.p_duplicates])
+    if meta.sample_method:
+        references.add(meta.sample_method)
+
+    for issue in verdict.top_issues:
+        references.add(issue.source)
+        references.add(issue.issue_type)
+        references.add(issue.effective_severity.value)
+        references.add(issue.severity.value)
+        if issue.affected_table:
+            references.add(issue.affected_table)
+        if issue.affected_column:
+            references.add(issue.affected_column)
+        _add_numbers(numbers, [issue.affected_count, issue.confidence])
+        if issue.detail_ref:
+            references.add(issue.detail_ref.file)
+            references.add(issue.detail_ref.collection)
+            _add_numbers(numbers, [issue.detail_ref.index])
 
     if findings is not None:
         references.add(findings.dataset_meta.file_name)

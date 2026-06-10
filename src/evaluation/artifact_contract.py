@@ -13,6 +13,7 @@ REQUIRED_ARTIFACTS = {
     "summary_report.md",
     "l4_report.md",
     "guardrail_report.json",
+    "artifact_manifest.json",
 }
 
 
@@ -33,6 +34,8 @@ class ArtifactEvalResult(BaseModel):
     missing_charts: list[str] = Field(default_factory=list)
     anomaly_export_count: int = 0
     missing_anomaly_exports: list[str] = Field(default_factory=list)
+    manifest_artifact_count: int = 0
+    missing_manifest_artifacts: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 
@@ -69,6 +72,8 @@ def evaluate_output_dir(case: ArtifactEvalCase) -> ArtifactEvalResult:
     missing_charts: list[str] = []
     anomaly_export_count = 0
     missing_anomaly_exports: list[str] = []
+    manifest_artifact_count = 0
+    missing_manifest_artifacts: list[str] = []
 
     guardrail_path = output_dir / "guardrail_report.json"
     if guardrail_path.exists():
@@ -90,6 +95,17 @@ def evaluate_output_dir(case: ArtifactEvalCase) -> ArtifactEvalResult:
                 if not export_path.is_file():
                     missing_anomaly_exports.append(str(export_path))
 
+    manifest_path = output_dir / "artifact_manifest.json"
+    if manifest_path.exists():
+        manifest = _read_json(manifest_path)
+        for artifact in manifest.get("artifacts", []):
+            artifact_path = _resolve_artifact(output_dir, artifact.get("path"))
+            if artifact_path is None:
+                continue
+            manifest_artifact_count += 1
+            if not artifact_path.is_file():
+                missing_manifest_artifacts.append(str(artifact_path))
+
     if case.expect_charts and chart_count == 0:
         notes.append("Expected at least one diagnostic chart but none were referenced.")
     if case.expect_anomaly_exports and anomaly_export_count == 0:
@@ -100,6 +116,7 @@ def evaluate_output_dir(case: ArtifactEvalCase) -> ArtifactEvalResult:
         and guardrail_status == "passed"
         and not missing_charts
         and not missing_anomaly_exports
+        and not missing_manifest_artifacts
         and (chart_count > 0 or not case.expect_charts)
         and (anomaly_export_count > 0 or not case.expect_anomaly_exports)
     )
@@ -113,6 +130,8 @@ def evaluate_output_dir(case: ArtifactEvalCase) -> ArtifactEvalResult:
         missing_charts=missing_charts,
         anomaly_export_count=anomaly_export_count,
         missing_anomaly_exports=missing_anomaly_exports,
+        manifest_artifact_count=manifest_artifact_count,
+        missing_manifest_artifacts=missing_manifest_artifacts,
         notes=notes,
     )
 
@@ -128,6 +147,7 @@ def evaluate_output_dirs(cases: list[ArtifactEvalCase]) -> dict[str, Any]:
             "failed": len(results) - passed,
             "chart_count": sum(result.chart_count for result in results),
             "anomaly_export_count": sum(result.anomaly_export_count for result in results),
+            "manifest_artifact_count": sum(result.manifest_artifact_count for result in results),
         },
         "results": [result.model_dump(mode="json") for result in results],
     }

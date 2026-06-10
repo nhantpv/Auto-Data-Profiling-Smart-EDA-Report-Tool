@@ -24,6 +24,11 @@ class DatasetMeta(BaseModel):
     n_duplicates: int = 0
     p_duplicates: float = 0.0
     overview_charts: Dict[str, str] = Field(default_factory=dict)
+    is_sampled: bool = False
+    original_n: Optional[int] = None
+    sample_n: Optional[int] = None
+    sample_method: Optional[str] = None
+    sample_seed: Optional[int] = None
 
 
 class ColumnStats(BaseModel):
@@ -72,11 +77,46 @@ class VerdictSummary(BaseModel):
     info: int = 0
 
 
+class IssueDetailRef(BaseModel):
+    file: str
+    collection: str
+    index: int
+
+
+class IssueSummary(BaseModel):
+    source: str
+    issue_type: str
+    effective_severity: Severity
+    severity: Severity
+    affected_table: Optional[str] = None
+    affected_column: Optional[str] = None
+    affected_count: int = 0
+    confidence: Optional[float] = None
+    rationale: str
+    detail_ref: Optional[IssueDetailRef] = None
+
+
 class DatasetVerdict(BaseModel):
     dataset_meta: DatasetMeta
     verdict: Verdict
     verdict_rationale: str
     summary: VerdictSummary
+    top_issues: List[IssueSummary] = Field(default_factory=list)
+    risk_score: Optional[float] = None
+    calibration_status: str = "heuristic_v0_not_benchmark_calibrated"
+
+
+class ArtifactRecord(BaseModel):
+    artifact_id: str
+    kind: str
+    path: str
+    source_layer: str
+    description: Optional[str] = None
+
+
+class ArtifactManifest(BaseModel):
+    schema_version: str = "artifact_manifest_v1"
+    artifacts: List[ArtifactRecord] = Field(default_factory=list)
 
 
 class SchemaMeta(BaseModel):

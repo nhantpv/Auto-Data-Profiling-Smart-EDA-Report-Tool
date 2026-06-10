@@ -28,6 +28,9 @@ def _compact_payload(
         "verdict": verdict.verdict.value,
         "verdict_rationale": verdict.verdict_rationale,
         "summary": verdict.summary.model_dump(),
+        "top_issues": [issue.model_dump(exclude_none=True) for issue in verdict.top_issues],
+        "risk_score": verdict.risk_score,
+        "calibration_status": verdict.calibration_status,
         "data_quality_issues": [],
         "schema_issues": [],
         "relationships": [],
@@ -74,6 +77,27 @@ def render_deterministic_l4_report(
         verdict.verdict_rationale,
         "",
     ]
+    if meta.is_sampled:
+        lines.extend([
+            "## Sampling",
+            "",
+            f"The input had `{meta.original_n}` original rows. Profiling used `{meta.sample_n}` rows with `{meta.sample_method}` sampling and seed `{meta.sample_seed}`.",
+            "",
+        ])
+
+    if verdict.top_issues:
+        lines.extend([
+            "## Top Issues Driving The Verdict",
+            "",
+            "| Effective Severity | Type | Scope | Affected Rows |",
+            "| --- | --- | --- | --- |",
+        ])
+        for issue in verdict.top_issues[:10]:
+            scope = issue.affected_column or issue.affected_table or "dataset"
+            lines.append(
+                f"| `{issue.effective_severity.value}` | `{issue.issue_type}` | {_issue_scope(scope if scope != 'dataset' else None)} | `{issue.affected_count}` |"
+            )
+        lines.append("")
 
     if findings is not None:
         lines.extend([

@@ -53,6 +53,8 @@ _DEFAULT_SCHEMA_POLICY = {
         "customers": "customer",
         "user": "user",
         "users": "user",
+        "buyer": "user",
+        "seller": "user",
         "order": "order",
         "orders": "order",
         "product": "product",
@@ -695,6 +697,20 @@ def _relationship_name_score(child_col: str, parent_col: str, parent_table: str)
     return max(_name_similarity(child_col, parent_col), _name_similarity(child_col, parent_table))
 
 
+def _has_required_relationship_semantics(child_col: str, parent_col: str, parent_table: str) -> bool:
+    parent_tokens = set(_identifier_tokens(parent_col))
+    parent_is_generic_identifier = bool(parent_tokens) and parent_tokens <= _GENERIC_TOKENS
+    if not parent_is_generic_identifier:
+        return True
+
+    child_concepts = _concept_tokens(child_col)
+    if not child_concepts:
+        return True
+
+    parent_concepts = _concept_tokens(parent_col) | _concept_tokens(parent_table)
+    return bool(child_concepts & parent_concepts)
+
+
 def _explicit_relationships(refs: list) -> list[RelationshipInfo]:
     return [
         RelationshipInfo(
@@ -735,10 +751,20 @@ def infer_relationships(
                     key = _ref_key(child_t, child_col, parent_t, parent_col)
                     if key in explicit_keys:
                         continue
+                    child_tokens = set(_identifier_tokens(child_col))
+                    child_is_generic_unique_id = (
+                        bool(child_tokens)
+                        and child_tokens <= _GENERIC_TOKENS
+                        and _is_unique_key(child_df[child_col])
+                    )
+                    if child_is_generic_unique_id:
+                        continue
                     coverage, total, unmatched = _value_coverage(child_df[child_col], parent_df[parent_col])
                     if coverage < _THRESHOLDS["relationship_value_coverage"]:
                         continue
                     name_score = _relationship_name_score(child_col, parent_col, parent_t)
+                    if not _has_required_relationship_semantics(child_col, parent_col, parent_t):
+                        continue
                     if name_score < _THRESHOLDS["relationship_name_score"] and parent_unique_bonus == 0.0:
                         continue
                     confidence = round(min(

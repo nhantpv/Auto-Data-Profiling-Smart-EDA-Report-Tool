@@ -29,6 +29,45 @@
           "parent_column": "class_id"
         }
       ]
+    },
+    {
+      "id": "surrogate_key_false_positive_guard",
+      "data_files": [
+        "tests/fixtures/schema_relationship_eval/surrogate_false_positive/users.csv",
+        "tests/fixtures/schema_relationship_eval/surrogate_false_positive/products.csv",
+        "tests/fixtures/schema_relationship_eval/surrogate_false_positive/orders.csv"
+      ],
+      "schema_file": null,
+      "expected_relationships": [
+        {
+          "child_table": "orders",
+          "child_column": "user_id",
+          "parent_table": "users",
+          "parent_column": "id"
+        }
+      ]
+    },
+    {
+      "id": "multi_role_fk_aliases",
+      "data_files": [
+        "tests/fixtures/schema_relationship_eval/multi_role/users.csv",
+        "tests/fixtures/schema_relationship_eval/multi_role/marketplace_orders.csv"
+      ],
+      "schema_file": null,
+      "expected_relationships": [
+        {
+          "child_table": "marketplace_orders",
+          "child_column": "buyer_id",
+          "parent_table": "users",
+          "parent_column": "id"
+        },
+        {
+          "child_table": "marketplace_orders",
+          "child_column": "seller_id",
+          "parent_table": "users",
+          "parent_column": "id"
+        }
+      ]
     }
   ]
 }

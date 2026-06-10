@@ -34,6 +34,7 @@ KNOWN_OUTPUTS = {
     "summary_report.md",
     "l4_report.md",
     "guardrail_report.json",
+    "artifact_manifest.json",
 }
 MAX_UPLOAD_BYTES = int(os.getenv("SMART_EDA_MAX_UPLOAD_MB", "100")) * 1024 * 1024
 MAX_MULTI_FILES = int(os.getenv("SMART_EDA_MAX_MULTI_FILES", "10"))
@@ -147,6 +148,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "data_quality_findings": _read_json(output_dir / "data_quality_findings.json"),
         "schema_evaluation_findings": _read_json(output_dir / "schema_evaluation_findings.json"),
         "guardrail_report": _read_json(output_dir / "guardrail_report.json"),
+        "artifact_manifest": _read_json(output_dir / "artifact_manifest.json"),
         "links": {
             name: f"/api/jobs/{job_id}/files/{name}"
             for name in files
