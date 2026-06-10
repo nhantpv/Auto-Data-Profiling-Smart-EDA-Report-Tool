@@ -96,6 +96,25 @@
               <span>Issues</span>
               <strong id="metricIssues">-</strong>
             </div>
+            <div class="metric-tile">
+              <span>Missing cells</span>
+              <strong id="metricMissing">-</strong>
+            </div>
+            <div class="metric-tile">
+              <span>Duplicate rows</span>
+              <strong id="metricDuplicates">-</strong>
+            </div>
+            <div class="metric-tile">
+              <span>Guardrail</span>
+              <strong id="metricGuardrail">-</strong>
+            </div>
+          </div>
+
+          <div class="result-stack" id="resultStack">
+            <section class="insight-panel empty-state">
+              <h3>Run summary</h3>
+              <p>Run a sample or upload files to see the verdict, top issues, relationships, charts and artifacts here.</p>
+            </section>
           </div>
 
           <div class="output-block">
@@ -103,10 +122,10 @@
             <div class="file-list empty" id="fileList">No output files</div>
           </div>
 
-          <div class="output-block report-block">
-            <h3>Summary report</h3>
+          <details class="output-block report-block">
+            <summary>Raw Markdown report</summary>
             <pre id="reportPreview">Run a pipeline to generate a report.</pre>
-          </div>
+          </details>
         </section>
       </main>
     </div>

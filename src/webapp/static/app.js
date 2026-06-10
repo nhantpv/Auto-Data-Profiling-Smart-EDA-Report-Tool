@@ -3,8 +3,12 @@ const titleEl = document.getElementById("resultTitle");
 const verdictEl = document.getElementById("metricVerdict");
 const rowsEl = document.getElementById("metricRows");
 const issuesEl = document.getElementById("metricIssues");
+const missingEl = document.getElementById("metricMissing");
+const duplicatesEl = document.getElementById("metricDuplicates");
+const guardrailEl = document.getElementById("metricGuardrail");
 const fileListEl = document.getElementById("fileList");
 const reportEl = document.getElementById("reportPreview");
+const resultStackEl = document.getElementById("resultStack");
 const serviceStatusEl = document.getElementById("serviceStatus");
 const sampleListEl = document.getElementById("sampleList");
 const singleForm = document.getElementById("singleForm");
@@ -29,18 +33,50 @@ function setButtonsDisabled(disabled) {
   });
 }
 
+function formatInteger(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? new Intl.NumberFormat("en-US").format(number) : "-";
+}
+
+function formatDecimal(value, digits = 3) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits) : "-";
+}
+
+function formatPercent(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : "-";
+}
+
+function clearStructuredResults(message = "Pipeline is running.") {
+  resultStackEl.replaceChildren();
+  const panel = document.createElement("section");
+  panel.className = "insight-panel empty-state";
+  panel.appendChild(textEl("h3", "", "Run summary"));
+  panel.appendChild(textEl("p", "", message));
+  resultStackEl.appendChild(panel);
+}
+
 function setLoading(title) {
   titleEl.textContent = title;
   setRunState("running", "Running");
   setButtonsDisabled(true);
   cancelJobButton.disabled = true;
   retryJobButton.disabled = true;
+  verdictEl.textContent = "-";
+  rowsEl.textContent = "-";
+  issuesEl.textContent = "-";
+  missingEl.textContent = "-";
+  duplicatesEl.textContent = "-";
+  guardrailEl.textContent = "-";
+  clearStructuredResults("The job is queued. Results will appear here as soon as the pipeline finishes.");
 }
 
 function setError(message) {
   titleEl.textContent = "Run failed";
   setRunState("failed", "Failed");
   reportEl.textContent = message || "Pipeline failed.";
+  clearStructuredResults(message || "Pipeline failed.");
   setButtonsDisabled(false);
   cancelJobButton.disabled = true;
   retryJobButton.disabled = !activeJobId;
@@ -50,9 +86,15 @@ function verdictSummary(payload) {
   const verdict = payload.dataset_verdict || {};
   const meta = verdict.dataset_meta || {};
   const summary = verdict.summary || {};
+  const guardrail = payload.guardrail_report || {};
   verdictEl.textContent = verdict.verdict || "-";
-  rowsEl.textContent = Number.isFinite(meta.n) ? String(meta.n) : "-";
-  issuesEl.textContent = Number.isFinite(summary.total_issues) ? String(summary.total_issues) : "-";
+  rowsEl.textContent = formatInteger(meta.n);
+  issuesEl.textContent = formatInteger(summary.total_issues);
+  missingEl.textContent = formatPercent(meta.p_cells_missing);
+  duplicatesEl.textContent = Number.isFinite(Number(meta.n_duplicates))
+    ? `${formatInteger(meta.n_duplicates)} (${formatPercent(meta.p_duplicates)})`
+    : "-";
+  guardrailEl.textContent = guardrail.status || "-";
 }
 
 function renderFiles(payload) {
@@ -88,6 +130,7 @@ function renderJobProgress(payload) {
   setRunState(status === "queued" ? "queued" : "running", `${status} ${progress}%`);
   verdictSummary(payload);
   renderFiles(payload);
+  clearStructuredResults(payload.message || "Pipeline is running.");
   reportEl.textContent = payload.report || payload.message || "Pipeline is running.";
   updateJobActions(payload);
 }
@@ -103,6 +146,7 @@ function renderResult(payload) {
   renderFiles(payload);
   const error = payload.error || {};
   reportEl.textContent = payload.report || error.detail || payload.message || "No report generated.";
+  renderStructuredResults(payload);
   setButtonsDisabled(false);
   updateJobActions(payload);
 }
@@ -168,6 +212,263 @@ function textEl(tag, className, text) {
   }
   el.textContent = text;
   return el;
+}
+
+function createPanel(title, subtitle) {
+  const panel = document.createElement("section");
+  panel.className = "insight-panel";
+  const header = document.createElement("div");
+  header.className = "insight-heading";
+  header.appendChild(textEl("h3", "", title));
+  if (subtitle) {
+    header.appendChild(textEl("p", "", subtitle));
+  }
+  panel.appendChild(header);
+  return panel;
+}
+
+function severityBadge(value) {
+  const badge = document.createElement("span");
+  const safe = String(value || "INFO").toLowerCase();
+  badge.className = `severity-badge severity-${safe}`;
+  badge.textContent = value || "INFO";
+  return badge;
+}
+
+function makeTable(columns, rows, emptyText) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "table-wrap";
+  if (!rows.length) {
+    wrapper.classList.add("empty-table");
+    wrapper.textContent = emptyText;
+    return wrapper;
+  }
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  columns.forEach((column) => {
+    headRow.appendChild(textEl("th", "", column.label));
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    columns.forEach((column) => {
+      const td = document.createElement("td");
+      const value = column.render ? column.render(row) : row[column.key];
+      if (value instanceof Node) {
+        td.appendChild(value);
+      } else {
+        td.textContent = value === undefined || value === null || value === "" ? "-" : String(value);
+      }
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrapper.appendChild(table);
+  return wrapper;
+}
+
+function issueScope(issue) {
+  return issue.affected_column || issue.affected_table || "dataset";
+}
+
+function getDataQualityIssues(dataQuality) {
+  if (!dataQuality) {
+    return [];
+  }
+  if (dataQuality.schema_version === "multi_table_data_quality_v1") {
+    return dataQuality.combined_findings?.anomalies || [];
+  }
+  return dataQuality.anomalies || [];
+}
+
+function renderVerdictPanel(payload) {
+  const verdict = payload.dataset_verdict || {};
+  const meta = verdict.dataset_meta || {};
+  const summary = verdict.summary || {};
+  const panel = createPanel("Verdict", "Decision summary from deterministic findings.");
+
+  const verdictLine = document.createElement("div");
+  verdictLine.className = "verdict-line";
+  verdictLine.appendChild(severityBadge(verdict.verdict || "UNKNOWN"));
+  verdictLine.appendChild(textEl("p", "", verdict.verdict_rationale || payload.message || "No verdict rationale emitted."));
+  panel.appendChild(verdictLine);
+
+  const facts = document.createElement("div");
+  facts.className = "fact-grid";
+  [
+    ["Rows", formatInteger(meta.n)],
+    ["Columns", formatInteger(meta.n_var)],
+    ["Total issues", formatInteger(summary.total_issues)],
+    ["Critical", formatInteger(summary.critical)],
+    ["High", formatInteger(summary.high)],
+    ["Warn", formatInteger(summary.warn)],
+  ].forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.appendChild(textEl("span", "", label));
+    item.appendChild(textEl("strong", "", value));
+    facts.appendChild(item);
+  });
+  panel.appendChild(facts);
+
+  if (meta.is_sampled) {
+    const note = textEl(
+      "p",
+      "sample-note",
+      `Profiled ${formatInteger(meta.sample_n)} sampled rows from ${formatInteger(meta.original_n)} original rows (${meta.sample_method || "sampling"}, seed ${meta.sample_seed ?? "-"}).`
+    );
+    panel.appendChild(note);
+  }
+  return panel;
+}
+
+function renderTopIssuesPanel(payload) {
+  const verdict = payload.dataset_verdict || {};
+  const panel = createPanel("Top Issues", "The issues that drive the current verdict.");
+  panel.appendChild(makeTable(
+    [
+      { label: "Severity", render: (issue) => severityBadge(issue.effective_severity || issue.severity) },
+      { label: "Type", key: "issue_type" },
+      { label: "Scope", render: issueScope },
+      { label: "Affected", render: (issue) => formatInteger(issue.affected_count) },
+      { label: "Reason", key: "rationale" },
+    ],
+    (verdict.top_issues || []).slice(0, 10),
+    "No top issues emitted."
+  ));
+  return panel;
+}
+
+function renderDataQualityPanel(payload) {
+  const issues = getDataQualityIssues(payload.data_quality_findings).slice(0, 12);
+  const panel = createPanel("Data Quality Findings", "Column and row-level findings from L1-L2.5.");
+  panel.appendChild(makeTable(
+    [
+      { label: "Severity", render: (issue) => severityBadge(issue.compound_severity || issue.severity) },
+      { label: "Type", key: "issue_type" },
+      { label: "Scope", render: issueScope },
+      { label: "Affected", render: (issue) => `${formatInteger(issue.affected_count)} (${formatPercent(issue.affected_percent)})` },
+      { label: "Export", render: (issue) => issue.full_anomalies_export_path ? "available" : "-" },
+    ],
+    issues,
+    "No data quality issues emitted."
+  ));
+  return panel;
+}
+
+function renderSchemaPanel(payload) {
+  const schema = payload.schema_evaluation_findings || {};
+  const relationships = schema.relationships || [];
+  const errors = schema.integrity_errors || [];
+  const panel = createPanel("Schema & Relationships", "Inferred or explicit table relationships and schema issues.");
+  panel.appendChild(makeTable(
+    [
+      { label: "Status", key: "status" },
+      {
+        label: "Relationship",
+        render: (rel) => `${rel.child_table}.${rel.child_column} -> ${rel.parent_table}.${rel.parent_column}`,
+      },
+      { label: "Confidence", render: (rel) => formatDecimal(rel.confidence, 3) },
+      { label: "Evidence", render: (rel) => (rel.evidence || []).join("; ") },
+    ],
+    relationships.slice(0, 10),
+    "No relationships emitted."
+  ));
+
+  if (errors.length) {
+    const subheading = textEl("h4", "", "Schema issues");
+    panel.appendChild(subheading);
+    panel.appendChild(makeTable(
+      [
+        { label: "Severity", render: (issue) => severityBadge(issue.compound_severity || issue.severity) },
+        { label: "Type", key: "error_type" },
+        { label: "Scope", render: issueScope },
+        { label: "Affected", render: (issue) => formatInteger(issue.affected_count) },
+        { label: "Description", key: "description" },
+      ],
+      errors.slice(0, 10),
+      "No schema issues emitted."
+    ));
+  }
+  return panel;
+}
+
+function renderChartsPanel(payload) {
+  const links = payload.links || {};
+  const chartNames = Object.keys(links).filter((name) => name.toLowerCase().endsWith(".png"));
+  if (!chartNames.length) {
+    return null;
+  }
+  const panel = createPanel("Diagnostic Charts", "Generated chart artifacts shown directly from L3.5.");
+  const grid = document.createElement("div");
+  grid.className = "chart-grid";
+  chartNames.forEach((name) => {
+    const link = document.createElement("a");
+    link.href = links[name];
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "chart-card";
+    const img = document.createElement("img");
+    img.src = links[name];
+    img.alt = name;
+    img.loading = "lazy";
+    link.appendChild(img);
+    link.appendChild(textEl("span", "", name));
+    grid.appendChild(link);
+  });
+  panel.appendChild(grid);
+  return panel;
+}
+
+function renderArtifactPanel(payload) {
+  const manifest = payload.artifact_manifest || {};
+  const artifacts = manifest.artifacts || [];
+  const links = payload.links || {};
+  const panel = createPanel("Artifacts", "Machine-readable outputs and exported rows.");
+  panel.appendChild(makeTable(
+    [
+      { label: "Kind", key: "kind" },
+      { label: "Layer", key: "source_layer" },
+      {
+        label: "File",
+        render: (artifact) => {
+          const link = document.createElement("a");
+          link.href = links[artifact.path] || "#";
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = artifact.path;
+          if (!links[artifact.path]) {
+            link.removeAttribute("href");
+          }
+          return link;
+        },
+      },
+    ],
+    artifacts,
+    "No artifact manifest emitted."
+  ));
+  return panel;
+}
+
+function renderStructuredResults(payload) {
+  resultStackEl.replaceChildren();
+  if (payload.status === "failed") {
+    clearStructuredResults(payload.error?.detail || payload.message || "Pipeline failed.");
+    return;
+  }
+  const panels = [
+    renderVerdictPanel(payload),
+    renderTopIssuesPanel(payload),
+    renderDataQualityPanel(payload),
+    renderSchemaPanel(payload),
+    renderChartsPanel(payload),
+    renderArtifactPanel(payload),
+  ].filter(Boolean);
+  panels.forEach((panel) => resultStackEl.appendChild(panel));
 }
 
 function renderExamples(examples) {
