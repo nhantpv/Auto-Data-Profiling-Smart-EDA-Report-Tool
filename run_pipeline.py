@@ -153,7 +153,12 @@ def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
             "</body></html>"
         )
     try:
-        return ProfileReport(df, minimal=minimal, progress_bar=False).to_html()
+        # Member C owns the ydata HTML generation; fall back while it lands.
+        try:
+            from engines.profiling_engine import run_profiling_html
+            return run_profiling_html(df, minimal=minimal)
+        except (ImportError, AttributeError):
+            return ProfileReport(df, minimal=minimal, progress_bar=False).to_html()
     except Exception as exc:
         return (
             "<!doctype html><html><body>"
@@ -479,6 +484,43 @@ def run_multi(
     }
 
 
+def _parse_multi_args(args: list) -> tuple:
+    """Parse --multi mode CLI tokens.
+
+    Returns (data_paths, out_dir, schema_path, confirmed_schema_path, fact_table).
+    Raises ValueError on dangling flags, unknown flags, or <2 data paths.
+    """
+    flags = {
+        "--out": "output",
+        "--schema": None,
+        "--confirmed-schema": None,
+        "--fact-table": None,
+    }
+    data_paths: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in flags:
+            if index + 1 >= len(args):
+                raise ValueError(f"Flag {token} requires a value")
+            flags[token] = args[index + 1]
+            index += 2
+            continue
+        if token.startswith("--"):
+            raise ValueError(f"Unknown flag: {token}")
+        data_paths.append(token)
+        index += 1
+    if len(data_paths) < 2:
+        raise ValueError("--multi mode requires at least two data files")
+    return (
+        data_paths,
+        flags["--out"],
+        flags["--schema"],
+        flags["--confirmed-schema"],
+        flags["--fact-table"],
+    )
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python run_pipeline.py <data_path> [out_dir] [schema.dbml|schema.sql]")
@@ -487,30 +529,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if sys.argv[1] == "--multi":
-        args = sys.argv[2:]
-        out_arg = "output"
-        if "--out" in args:
-            out_idx = args.index("--out")
-            out_arg = args[out_idx + 1]
-            del args[out_idx:out_idx + 2]
-        schema_arg = None
-        if "--schema" in args:
-            schema_idx = args.index("--schema")
-            schema_arg = args[schema_idx + 1]
-            del args[schema_idx:schema_idx + 2]
-        confirmed_schema_arg = None
-        if "--confirmed-schema" in args:
-            confirmed_idx = args.index("--confirmed-schema")
-            confirmed_schema_arg = args[confirmed_idx + 1]
-            del args[confirmed_idx:confirmed_idx + 2]
-        fact_table_arg = None
-        if "--fact-table" in args:
-            fact_idx = args.index("--fact-table")
-            fact_table_arg = args[fact_idx + 1]
-            del args[fact_idx:fact_idx + 2]
-        data_args = args
-        if len(data_args) < 2:
-            print("Error: --multi mode requires at least two data files")
+        try:
+            data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg = (
+                _parse_multi_args(sys.argv[2:])
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
             sys.exit(1)
         run_multi(data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg)
     else:
