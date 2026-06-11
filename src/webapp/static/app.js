@@ -11,6 +11,8 @@ const reportEl = document.getElementById("reportPreview");
 const resultStackEl = document.getElementById("resultStack");
 const serviceStatusEl = document.getElementById("serviceStatus");
 const sampleListEl = document.getElementById("sampleList");
+const jobProgressBarEl = document.getElementById("jobProgressBar");
+const reportActionsEl = document.getElementById("reportActions");
 const singleForm = document.getElementById("singleForm");
 const multiForm = document.getElementById("multiForm");
 const cancelJobButton = document.getElementById("cancelJob");
@@ -25,6 +27,16 @@ function isTerminalStatus(status) {
 function setRunState(kind, label) {
   stateEl.className = `run-state ${kind}`;
   stateEl.textContent = label;
+}
+
+function setProgress(value) {
+  const pct = Math.max(0, Math.min(100, Math.round(Number(value || 0) * 100)));
+  jobProgressBarEl.style.width = `${pct}%`;
+}
+
+function clearReportActions() {
+  reportActionsEl.replaceChildren();
+  reportActionsEl.classList.add("hidden");
 }
 
 function setButtonsDisabled(disabled) {
@@ -69,6 +81,8 @@ function setLoading(title) {
   missingEl.textContent = "-";
   duplicatesEl.textContent = "-";
   guardrailEl.textContent = "-";
+  setProgress(0.05);
+  clearReportActions();
   clearStructuredResults("The job is queued. Results will appear here as soon as the pipeline finishes.");
 }
 
@@ -76,6 +90,8 @@ function setError(message) {
   titleEl.textContent = "Run failed";
   setRunState("failed", "Failed");
   reportEl.textContent = message || "Pipeline failed.";
+  setProgress(1);
+  clearReportActions();
   clearStructuredResults(message || "Pipeline failed.");
   setButtonsDisabled(false);
   cancelJobButton.disabled = true;
@@ -116,6 +132,41 @@ function renderFiles(payload) {
   });
 }
 
+function renderReportActions(payload) {
+  clearReportActions();
+  if (payload.status !== "completed") {
+    return;
+  }
+  const reportUrl = payload.report_url || (payload.job_id ? `/api/jobs/${encodeURIComponent(payload.job_id)}/report` : null);
+  const downloadUrl = payload.links?.["smart_eda_report.html"];
+  if (!reportUrl && !downloadUrl) {
+    return;
+  }
+  reportActionsEl.classList.remove("hidden");
+  const copy = document.createElement("div");
+  copy.className = "report-actions-copy";
+  copy.appendChild(textEl("strong", "", "Smart EDA HTML report"));
+  copy.appendChild(textEl("span", "", "Open the full tabbed report or download the standalone HTML artifact."));
+  reportActionsEl.appendChild(copy);
+  if (reportUrl) {
+    const view = document.createElement("a");
+    view.className = "report-action primary-report";
+    view.href = reportUrl;
+    view.target = "_blank";
+    view.rel = "noopener";
+    view.textContent = "View Full Report";
+    reportActionsEl.appendChild(view);
+  }
+  if (downloadUrl) {
+    const download = document.createElement("a");
+    download.className = "report-action";
+    download.href = downloadUrl;
+    download.download = "smart_eda_report.html";
+    download.textContent = "Download HTML";
+    reportActionsEl.appendChild(download);
+  }
+}
+
 function updateJobActions(payload) {
   const status = payload.status || "idle";
   activeJobId = payload.job_id || activeJobId;
@@ -127,6 +178,8 @@ function renderJobProgress(payload) {
   titleEl.textContent = `Job ${payload.job_id}`;
   const status = payload.status || "running";
   const progress = Math.round(Number(payload.progress || 0) * 100);
+  setProgress(payload.progress || 0);
+  clearReportActions();
   setRunState(status === "queued" ? "queued" : "running", `${status} ${progress}%`);
   verdictSummary(payload);
   renderFiles(payload);
@@ -144,6 +197,8 @@ function renderResult(payload) {
   }
   verdictSummary(payload);
   renderFiles(payload);
+  setProgress(1);
+  renderReportActions(payload);
   const error = payload.error || {};
   reportEl.textContent = payload.report || error.detail || payload.message || "No report generated.";
   renderStructuredResults(payload);
@@ -404,6 +459,18 @@ function renderSchemaPanel(payload) {
     "No relationships emitted."
   ));
 
+  if (payload.job_id && relationships.length) {
+    const actions = document.createElement("div");
+    actions.className = "schema-actions";
+    const confirm = document.createElement("button");
+    confirm.className = "secondary-action";
+    confirm.type = "button";
+    confirm.textContent = "Save confirmed schema";
+    confirm.addEventListener("click", () => saveConfirmedSchema(payload, confirm));
+    actions.appendChild(confirm);
+    panel.appendChild(actions);
+  }
+
   if ((graph.edges || []).length) {
     const graphHeading = textEl("h4", "", "Relationship graph");
     panel.appendChild(graphHeading);
@@ -438,6 +505,47 @@ function renderSchemaPanel(payload) {
     ));
   }
   return panel;
+}
+
+async function saveConfirmedSchema(payload, button) {
+  const jobId = payload.job_id;
+  if (!jobId) {
+    return;
+  }
+  const previous = button.textContent;
+  button.disabled = true;
+  button.textContent = "Saving";
+  try {
+    const suggestionsResponse = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/schema-suggestions`);
+    const suggestions = await suggestionsResponse.json();
+    if (!suggestionsResponse.ok) {
+      throw new Error(suggestions.detail || `HTTP ${suggestionsResponse.status}`);
+    }
+    const confirmResponse = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/schema-confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode: "precise",
+        fact_table: suggestions.fact_table,
+        confirmed_pks: suggestions.suggested_pks,
+        relationships: suggestions.relationships,
+      }),
+    });
+    const result = await confirmResponse.json();
+    if (!confirmResponse.ok) {
+      throw new Error(result.detail || `HTTP ${confirmResponse.status}`);
+    }
+    button.textContent = "Saved confirmed_schema.json";
+  } catch (error) {
+    button.textContent = error instanceof Error ? error.message : "Save failed";
+  } finally {
+    window.setTimeout(() => {
+      button.disabled = false;
+      if (button.textContent !== "Saved confirmed_schema.json") {
+        button.textContent = previous;
+      }
+    }, 2200);
+  }
 }
 
 function basename(path) {

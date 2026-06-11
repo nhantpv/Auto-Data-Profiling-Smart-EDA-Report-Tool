@@ -85,20 +85,56 @@ def _extract_openai_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def _extract_chat_completion_text(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        return "\n".join(parts).strip()
+    return ""
+
+
 def _call_openai(prompt: str, instructions: str, model_env: str, default_model: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is not set")
 
     model = os.getenv(model_env, default_model)
-    request_body = {
-        "model": model,
-        "instructions": instructions,
-        "input": prompt,
-        "max_output_tokens": 1200,
-    }
+    api_mode = os.getenv("SMART_EDA_L4_API_MODE", "chat_completions").strip().lower().replace("-", "_")
+    if api_mode in {"chat", "chat_completions"}:
+        endpoint = "https://api.openai.com/v1/chat/completions"
+        request_body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+            "max_tokens": 1200,
+        }
+        extractor = _extract_chat_completion_text
+    elif api_mode == "responses":
+        endpoint = "https://api.openai.com/v1/responses"
+        request_body = {
+            "model": model,
+            "instructions": instructions,
+            "input": prompt,
+            "max_output_tokens": 1200,
+        }
+        extractor = _extract_openai_text
+    else:
+        raise RuntimeError(f"Unsupported SMART_EDA_L4_API_MODE: {api_mode}")
+
     request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
+        endpoint,
         data=json.dumps(request_body).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -111,11 +147,11 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
             response_payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI L4 request failed: HTTP {exc.code} {body}") from exc
+        raise RuntimeError(f"OpenAI L4 request failed on {api_mode}: HTTP {exc.code} {body}") from exc
 
-    text = _extract_openai_text(response_payload)
+    text = extractor(response_payload)
     if not text:
-        raise RuntimeError("OpenAI L4 response did not include text")
+        raise RuntimeError(f"OpenAI L4 {api_mode} response did not include text")
     return text
 
 
@@ -159,7 +195,7 @@ def _render_cluster_markdown(cluster: IssueCluster) -> str:
     return "\n".join(lines)
 
 
-async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
+async def _run_analyst(cluster: IssueCluster, llm_errors: list[str] | None = None) -> AnalystOutput:
     fallback_markdown = _render_cluster_markdown(cluster)
     llm_enabled = _llm_enabled()
 
@@ -180,7 +216,11 @@ async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
                     "SMART_EDA_L4_ANALYST_MODEL",
                     "gpt-4o-mini",
                 )
-            except Exception:
+            except Exception as exc:
+                if llm_errors is not None:
+                    llm_errors.append(
+                        f"analyst:{cluster.issue_type}:attempt_{attempt}: {exc}"
+                    )
                 continue
             report = verify_analyst_output(
                 markdown,
@@ -235,6 +275,7 @@ async def _run_editor(
     verdict: DatasetVerdict,
     analyst_outputs: list[AnalystOutput],
     cross_table_analysis: CrossTableAnalysis | None,
+    llm_errors: list[str] | None = None,
 ) -> EditorOutput:
     meta = verdict.dataset_meta
     fallback = EditorOutput(
@@ -272,7 +313,9 @@ async def _run_editor(
                     "gpt-4o",
                 )
                 candidate = EditorOutput.model_validate_json(text)
-            except Exception:
+            except Exception as exc:
+                if llm_errors is not None:
+                    llm_errors.append(f"editor:attempt_{attempt}: {exc}")
                 continue
             report = verify_editor_output(
                 candidate.model_dump(mode="json"),
@@ -369,17 +412,29 @@ async def run_multi_agent_l4(
         findings.anomalies if findings is not None else [],
         schema.integrity_errors if schema is not None else [],
     )
+    llm_errors: list[str] = []
     analyst_outputs = await asyncio.gather(*[
-        _run_analyst(cluster)
+        _run_analyst(cluster, llm_errors)
         for cluster in dispatch_result.top_clusters
     ])
-    editor_output = await _run_editor(verdict, list(analyst_outputs), cross_table_analysis)
+    editor_output = await _run_editor(
+        verdict,
+        list(analyst_outputs),
+        cross_table_analysis,
+        llm_errors,
+    )
+    llm_enabled = _llm_enabled()
+    used_fallback = (
+        not llm_enabled
+        or any(output.retry_count >= 3 for output in analyst_outputs)
+        or editor_output.retry_count >= 3
+    )
     result = MultiAgentResult(
         analyst_outputs=list(analyst_outputs),
         editor_output=editor_output,
         appendix_html=_render_appendix_html(dispatch_result),
         guardrail_report={},
-        used_fallback=not _llm_enabled(),
+        used_fallback=used_fallback,
     )
     text = render_multi_agent_markdown(result, verdict)
     report = validate_narrative(
@@ -390,6 +445,7 @@ async def run_multi_agent_l4(
         provider="openai-multi-agent" if _llm_enabled() else "deterministic-multi-agent",
         used_fallback=result.used_fallback,
     )
+    report.llm_errors = llm_errors
     if report.status != "passed":
         text = render_deterministic_l4_report(findings, verdict, schema)
         report = validate_narrative(
@@ -400,6 +456,7 @@ async def run_multi_agent_l4(
             provider="deterministic-fallback",
             used_fallback=True,
         )
+        report.llm_errors = llm_errors
         result.used_fallback = True
     result.guardrail_report = report.model_dump(mode="json")
     return text, report, result
@@ -427,6 +484,9 @@ def _run_multi_agent_sync(
         provider="deterministic-fallback",
         used_fallback=True,
     )
+    report.llm_errors = [
+        "L4 was called from an active event loop; deterministic fallback was used."
+    ]
     result = MultiAgentResult(
         editor_output=EditorOutput(
             executive_summary=f"Dataset {verdict.dataset_meta.file_name} has {verdict.dataset_meta.n} rows.",

@@ -1,5 +1,7 @@
 demo_ydata
 .venv
+.env
+.env.local
 output*
 __pycache__/
 *.pyc

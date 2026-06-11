@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,6 +37,7 @@ KNOWN_OUTPUTS = {
     "dataset_verdict.json",
     "summary_report.md",
     "l4_report.md",
+    "smart_eda_report.html",
     "guardrail_report.json",
     "artifact_manifest.json",
 }
@@ -156,6 +157,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "cross_table_analysis": _read_json(output_dir / "cross_table_analysis.json"),
         "guardrail_report": _read_json(output_dir / "guardrail_report.json"),
         "artifact_manifest": _read_json(output_dir / "artifact_manifest.json"),
+        "report_url": f"/api/jobs/{job_id}/report" if (output_dir / "smart_eda_report.html").exists() else None,
         "links": {
             name: f"/api/jobs/{job_id}/files/{name}"
             for name in files
@@ -363,6 +365,87 @@ def get_job(job_id: str) -> JSONResponse:
     return JSONResponse(_job_response(job_id, output_dir))
 
 
+@app.get("/api/jobs/{job_id}/report")
+def get_smart_eda_report(job_id: str) -> HTMLResponse:
+    """Serve the final Smart EDA HTML report."""
+    job_id = _validate_job_id(job_id)
+    report_path = JOBS_DIR / job_id / "smart_eda_report.html"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report not yet generated")
+    return HTMLResponse(report_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/jobs/{job_id}/schema-suggestions")
+def get_schema_suggestions(job_id: str) -> JSONResponse:
+    """Return inferred schema suggestions for review/confirmation."""
+    job_id = _validate_job_id(job_id)
+    output_dir = JOBS_DIR / job_id
+    if not output_dir.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    schema = _read_json(output_dir / "schema_evaluation_findings.json") or {}
+    gate = _read_json(output_dir / "schema_gate.json") or {}
+    graph = _read_json(output_dir / "relationship_graph.json") or {}
+    relationships = schema.get("relationships") or gate.get("relationships") or []
+    suggested_pks: dict[str, list[dict]] = {}
+    if isinstance(relationships, list):
+        for rel in relationships:
+            if not isinstance(rel, dict):
+                continue
+            table = str(rel.get("parent_table") or "")
+            column = str(rel.get("parent_column") or "")
+            if not table or not column:
+                continue
+            candidate = {
+                "column": column,
+                "confidence": rel.get("confidence"),
+                "source_relationship": (
+                    f"{rel.get('child_table')}.{rel.get('child_column')} -> "
+                    f"{rel.get('parent_table')}.{rel.get('parent_column')}"
+                ),
+            }
+            if candidate not in suggested_pks.setdefault(table, []):
+                suggested_pks[table].append(candidate)
+    return JSONResponse({
+        "job_id": job_id,
+        "schema_status": gate.get("schema_status", "unknown") if isinstance(gate, dict) else "unknown",
+        "fact_table": gate.get("fact_table") if isinstance(gate, dict) else None,
+        "tables": schema.get("tables", []) if isinstance(schema, dict) else [],
+        "relationships": relationships if isinstance(relationships, list) else [],
+        "suggested_pks": suggested_pks,
+        "graph": graph,
+    })
+
+
+@app.post("/api/jobs/{job_id}/schema-confirm")
+def confirm_schema(job_id: str, body: Annotated[dict, Body(...)]) -> JSONResponse:
+    """Persist a confirmed schema JSON that can be reused by precise multi-table runs."""
+    job_id = _validate_job_id(job_id)
+    output_dir = JOBS_DIR / job_id
+    if not output_dir.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+    relationships = (
+        body.get("relationships")
+        or body.get("confirmed_fks")
+        or body.get("confirmed_relationships")
+        or []
+    )
+    confirmed = {
+        **body,
+        "mode": body.get("mode", "precise"),
+        "schema_status": body.get("schema_status", "confirmed"),
+        "fact_table": body.get("fact_table"),
+        "relationships": relationships,
+    }
+    path = output_dir / "confirmed_schema.json"
+    path.write_text(json.dumps(confirmed, ensure_ascii=False, indent=2), encoding="utf-8")
+    return JSONResponse({
+        "job_id": job_id,
+        "status": "saved",
+        "path": "confirmed_schema.json",
+        "confirmed_schema": confirmed,
+    })
+
+
 @app.post("/api/jobs/{job_id}/cancel")
 def cancel_job(job_id: str) -> JSONResponse:
     job_id = _validate_job_id(job_id)
@@ -401,6 +484,8 @@ def get_job_file(job_id: str, file_name: str):
         raise HTTPException(status_code=404, detail="File not found")
     if file_name.endswith(".md"):
         return PlainTextResponse(path.read_text(encoding="utf-8"))
+    if file_name.endswith(".html"):
+        return FileResponse(path, media_type="text/html", filename=file_name)
     if file_name.endswith(".csv"):
         return FileResponse(path, media_type="text/csv", filename=file_name)
     if file_name.endswith(".png"):

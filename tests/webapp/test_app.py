@@ -39,6 +39,7 @@ def _write_outputs(out_dir: str, include_dq: bool = True, include_schema: bool =
     )
     (out / "summary_report.md").write_text("# Smart EDA Summary Report\n\nREADY\n", encoding="utf-8")
     (out / "l4_report.md").write_text("# L4 Guarded EDA Report\n\nREADY\n", encoding="utf-8")
+    (out / "smart_eda_report.html").write_text("<!doctype html><html><body>Smart report</body></html>", encoding="utf-8")
     (out / "guardrail_report.json").write_text(json.dumps({"status": "passed"}), encoding="utf-8")
     (out / "data__diagnostic_x_y.png").write_bytes(b"\x89PNG\r\n\x1a\n")
 
@@ -94,6 +95,8 @@ def test_single_job_upload_returns_outputs(tmp_path, monkeypatch):
     assert payload["dataset_verdict"]["verdict"] == "READY"
     assert "summary_report.md" in payload["files"]
     assert "l4_report.md" in payload["files"]
+    assert "smart_eda_report.html" in payload["files"]
+    assert payload["report_url"].endswith("/report")
     assert "data__diagnostic_x_y.png" in payload["files"]
     assert payload["guardrail_report"]["status"] == "passed"
     assert "schema_evaluation_findings.json" in payload["files"]
@@ -173,6 +176,92 @@ def test_multi_job_accepts_confirmed_schema_and_fact_table(tmp_path, monkeypatch
     assert response.status_code == 202
     payload = _await_job(client, response.json())
     assert payload["status"] == "completed"
+
+
+def test_job_report_endpoint_serves_html(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    def fake_run(data_path, out_dir, schema_path=None, profiling_minimal=False):
+        _write_outputs(out_dir)
+        return {}
+
+    monkeypatch.setattr(web_app.run_pipeline, "run", fake_run)
+    response = client.post(
+        "/api/jobs",
+        files={"data_file": ("data.csv", b"id,value\n1,10\n", "text/csv")},
+    )
+    payload = _await_job(client, response.json())
+    report = client.get(f"/api/jobs/{payload['job_id']}/report")
+
+    assert report.status_code == 200
+    assert "text/html" in report.headers["content-type"]
+    assert "Smart report" in report.text
+
+
+def test_schema_suggestions_and_confirm_endpoints(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    def fake_run_multi(data_paths, out_dir, schema_path=None):
+        _write_outputs(out_dir, include_dq=False, include_schema=True)
+        out = Path(out_dir)
+        (out / "schema_gate.json").write_text(
+            json.dumps({
+                "schema_version": "schema_gate_v1",
+                "schema_status": "inferred",
+                "fact_table": "orders",
+                "relationships": [
+                    {
+                        "child_table": "orders",
+                        "child_column": "user_id",
+                        "parent_table": "users",
+                        "parent_column": "id",
+                        "confidence": 0.95,
+                    }
+                ],
+            }),
+            encoding="utf-8",
+        )
+        (out / "schema_evaluation_findings.json").write_text(
+            json.dumps({
+                "schema_meta": {"schema_file": "inferred", "total_tables": 2, "total_relationships": 1},
+                "tables": [
+                    {"name": "users", "columns": ["id"]},
+                    {"name": "orders", "columns": ["id", "user_id"]},
+                ],
+                "integrity_errors": [],
+                "relationships": [
+                    {
+                        "child_table": "orders",
+                        "child_column": "user_id",
+                        "parent_table": "users",
+                        "parent_column": "id",
+                        "confidence": 0.95,
+                    }
+                ],
+            }),
+            encoding="utf-8",
+        )
+        return {}
+
+    monkeypatch.setattr(web_app.run_pipeline, "run_multi", fake_run_multi)
+    response = client.post(
+        "/api/jobs/multi",
+        files=[
+            ("data_files", ("users.csv", b"id\n1\n", "text/csv")),
+            ("data_files", ("orders.csv", b"id,user_id\n10,1\n", "text/csv")),
+        ],
+    )
+    payload = _await_job(client, response.json())
+    suggestions = client.get(f"/api/jobs/{payload['job_id']}/schema-suggestions")
+    assert suggestions.status_code == 200
+    assert suggestions.json()["suggested_pks"]["users"][0]["column"] == "id"
+
+    confirm = client.post(
+        f"/api/jobs/{payload['job_id']}/schema-confirm",
+        json={"fact_table": "orders", "confirmed_fks": suggestions.json()["relationships"]},
+    )
+    assert confirm.status_code == 200
+    assert confirm.json()["status"] == "saved"
 
 
 def test_rejects_unsupported_upload(tmp_path, monkeypatch):

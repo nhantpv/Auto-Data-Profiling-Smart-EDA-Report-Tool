@@ -1,54 +1,56 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart EDA Report — {file_name}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Smart EDA Report - {file_name}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
   <style>{css_content}</style>
 </head>
 <body>
-  <!-- ===== HEADER: Verdict Banner ===== -->
-  <header>
-    <div class="verdict-banner verdict-{verdict_class}">
-      <span class="verdict-icon">{verdict_icon}</span>
-      <h1>Verdict: {verdict_value}</h1>
-      <p class="verdict-rationale">{verdict_rationale}</p>
-    </div>
-    <div class="dataset-meta">
-      <span class="meta-item">{file_name}</span>
-      <span class="meta-sep">·</span>
-      <span class="meta-item">{n} rows</span>
-      <span class="meta-sep">·</span>
-      <span class="meta-item">{n_var} columns</span>
-      <span class="meta-sep">·</span>
-      <span class="meta-item">Missing: {p_cells_missing}</span>
-    </div>
-  </header>
+  <div class="report-shell">
+    <header class="report-header">
+      <div class="verdict-banner verdict-{verdict_class}">
+        <div class="verdict-symbol" aria-hidden="true">{verdict_icon}</div>
+        <div class="verdict-copy">
+          <p class="eyebrow">Smart EDA Verdict</p>
+          <h1>{verdict_value}</h1>
+          <p class="verdict-rationale">{verdict_rationale}</p>
+        </div>
+      </div>
 
-  <!-- ===== TAB BAR ===== -->
-  <nav class="tab-bar">
-    <button class="tab active" onclick="showTab('ai')">🤖 AI Analysis</button>
-    <button class="tab" onclick="showTab('stats')">📊 Statistical Details</button>
-  </nav>
+      <dl class="dataset-meta" aria-label="Dataset metadata">
+        <div><dt>File</dt><dd>{file_name}</dd></div>
+        <div><dt>Rows</dt><dd>{n}</dd></div>
+        <div><dt>Columns</dt><dd>{n_var}</dd></div>
+        <div><dt>Missing</dt><dd>{p_cells_missing}</dd></div>
+      </dl>
+    </header>
 
-  <!-- ===== TAB 1: AI ANALYSIS ===== -->
-  <main>
-    <div id="tab-ai" class="tab-content active">
-      {ai_analysis_content}
-    </div>
+    <nav class="tab-bar" role="tablist" aria-label="Report sections">
+      <button id="tab-button-ai" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-ai" data-tab="ai">AI Analysis</button>
+      <button id="tab-button-stats" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-stats" data-tab="stats">Statistical Details</button>
+    </nav>
 
-    <!-- ===== TAB 2: STATISTICAL DETAILS (ydata nguyên bản) ===== -->
-    <div id="tab-stats" class="tab-content" style="display:none">
-      <iframe srcdoc="{ydata_escaped}" class="ydata-frame"></iframe>
-    </div>
-  </main>
+    <main class="tab-panels">
+      <section id="tab-ai" class="tab-content active" role="tabpanel" aria-labelledby="tab-button-ai">
+        {ai_analysis_content}
+      </section>
 
-  <!-- ===== FOOTER ===== -->
-  <footer>
-    <p>Guardrail: {guardrail_status} · Provider: {provider} · Model: {model_info}</p>
-    <p class="timestamp">Generated: {timestamp}</p>
-  </footer>
+      <section id="tab-stats" class="tab-content" role="tabpanel" aria-labelledby="tab-button-stats" hidden>
+        <iframe srcdoc="{ydata_escaped}" class="ydata-frame" title="Statistical details from ydata profiling"></iframe>
+      </section>
+    </main>
 
+    <footer class="report-footer">
+      <span>Guardrail: {guardrail_status}</span>
+      <span>Provider: {provider}</span>
+      <span>Model: {model_info}</span>
+      <span>Generated: {timestamp}</span>
+    </footer>
+  </div>
   <script>{js_content}</script>
 </body>
 </html>

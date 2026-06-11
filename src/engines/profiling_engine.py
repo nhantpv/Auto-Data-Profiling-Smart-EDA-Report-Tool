@@ -24,3 +24,14 @@ def run_profiling(df: pd.DataFrame, minimal: bool = False) -> dict:
         result["table"]["p_duplicates"] = n_duplicates / len(df) if len(df) else 0.0
     logger.info("Profiling complete. Found %d variables.", len(result.get("variables", {})))
     return result
+
+
+def run_profiling_html(df: pd.DataFrame, minimal: bool = False) -> str:
+    """Run ydata-profiling and return the original HTML report.
+
+    The returned HTML is embedded into ``smart_eda_report.html`` via
+    ``iframe srcdoc`` so the statistical details remain interactive.
+    """
+    logger.info("Rendering profiling HTML for DataFrame with %d rows, %d cols.", len(df), len(df.columns))
+    profile = ProfileReport(df, minimal=minimal, progress_bar=False, title="Statistical Details")
+    return profile.to_html()

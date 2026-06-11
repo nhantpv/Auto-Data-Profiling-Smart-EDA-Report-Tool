@@ -1,13 +1,43 @@
-// Tab switching logic cho smart_eda_report.html
-// Member C có thể mở rộng thêm animation, keyboard navigation, etc.
+(function () {
+  const tabs = Array.from(document.querySelectorAll("[data-tab]"));
+  const panels = Array.from(document.querySelectorAll(".tab-content"));
+  const validIds = new Set(tabs.map((tab) => tab.dataset.tab));
 
-function showTab(id) {
-  document.querySelectorAll('.tab-content').forEach(function(el) {
-    el.style.display = 'none';
+  function showTab(id, options) {
+    const nextId = validIds.has(id) ? id : "ai";
+    tabs.forEach((tab) => {
+      const active = tab.dataset.tab === nextId;
+      tab.classList.toggle("active", active);
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach((panel) => {
+      const active = panel.id === `tab-${nextId}`;
+      panel.classList.toggle("active", active);
+      panel.hidden = !active;
+    });
+    if (!options || options.updateHash !== false) {
+      history.replaceState(null, "", `#${nextId}`);
+    }
+    if (!options || options.scroll !== false) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }
+
+  tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => showTab(tab.dataset.tab));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight"].includes(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const next = tabs[(index + direction + tabs.length) % tabs.length];
+      next.focus();
+      showTab(next.dataset.tab, { scroll: false });
+    });
   });
-  document.querySelectorAll('.tab').forEach(function(el) {
-    el.classList.remove('active');
-  });
-  document.getElementById('tab-' + id).style.display = 'block';
-  event.target.classList.add('active');
-}
+
+  window.addEventListener("hashchange", () => showTab(location.hash.slice(1), { updateHash: false, scroll: false }));
+  showTab(location.hash.slice(1), { updateHash: false, scroll: false });
+})();

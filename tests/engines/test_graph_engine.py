@@ -24,19 +24,24 @@ def _schema(rel: RelationshipInfo) -> SchemaEvaluationFindings:
     )
 
 
-def test_graph_skips_non_unique_parent_pk_and_emits_integrity_error():
+def test_graph_keeps_non_unique_parent_pk_edge_and_emits_integrity_error():
     tables = {
         "orders": pd.DataFrame({"user_id": [1, 2, 2], "total": [10, 20, 30]}),
         "users": pd.DataFrame({"id": [1, 1, 2], "score": [100, 999, 200]}),
     }
 
     graph = reconstruct_graph(tables, _schema(_rel()))
+    accepted = accepted_relationships_from_graph([_rel()], graph)
 
-    assert graph.edges == []
+    assert len(graph.edges) == 1
+    assert graph.edges[0].cardinality == "N:N"
+    assert graph.edges[0].role == "invalid_many_to_many"
+    assert graph.edges[0].pk_runtime_unique is False
     assert graph.integrity_errors[0].error_type == "NON_UNIQUE_PARENT_PK"
     assert graph.integrity_errors[0].severity == "CRITICAL"
     assert graph.non_unique_pk_tables == ["users"]
-    assert accepted_relationships_from_graph([_rel()], graph) == []
+    assert accepted[0].cardinality == "N:N"
+    assert accepted[0].role == "invalid_many_to_many"
 
 
 def test_graph_enriches_accepted_relationships_with_cardinality_and_role():

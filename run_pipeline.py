@@ -6,7 +6,6 @@ import warnings
 from pathlib import Path
 
 import pandas as pd
-from ydata_profiling import ProfileReport
 
 warnings.filterwarnings("ignore")
 
@@ -15,7 +14,7 @@ sys.path.insert(0, str(SRC))
 
 from ingestion.registry import load_any
 from ingestion.schema_reader import parse_schema
-from engines.profiling_engine import run_profiling
+from engines.profiling_engine import run_profiling, run_profiling_html
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from engines.cross_table_engine import run_cross_table_analysis
@@ -153,7 +152,7 @@ def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
             "</body></html>"
         )
     try:
-        return ProfileReport(df, minimal=minimal, progress_bar=False).to_html()
+        return run_profiling_html(df, minimal=minimal)
     except Exception as exc:
         return (
             "<!doctype html><html><body>"
@@ -161,6 +160,34 @@ def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
             f"<p>{html_lib.escape(str(exc))}</p>"
             "</body></html>"
         )
+
+
+def _multi_table_ydata_html(tables: dict[str, pd.DataFrame], minimal: bool = True) -> str:
+    if not tables:
+        return _safe_ydata_html(None, minimal=minimal)
+
+    sections = [
+        "<!doctype html><html><head><meta charset=\"utf-8\">",
+        "<style>",
+        "body{font-family:Arial,sans-serif;margin:0;background:#f8fafc;color:#111827;}",
+        "header{padding:16px 20px;background:#ffffff;border-bottom:1px solid #e5e7eb;}",
+        "main{padding:16px 20px;display:grid;gap:18px;}",
+        "section{background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;}",
+        "h1{font-size:20px;margin:0;} h2{font-size:16px;margin:0;padding:12px 14px;border-bottom:1px solid #e5e7eb;}",
+        "iframe{width:100%;height:720px;border:0;display:block;background:white;}",
+        "</style></head><body>",
+        f"<header><h1>Statistical profiles ({len(tables)} tables)</h1></header><main>",
+    ]
+    for table_name, df in tables.items():
+        profile_html = _safe_ydata_html(df, minimal=minimal)
+        sections.extend([
+            "<section>",
+            f"<h2>{html_lib.escape(table_name)}</h2>",
+            f"<iframe title=\"{html_lib.escape(table_name)} profile\" srcdoc=\"{html_lib.escape(profile_html, quote=True)}\"></iframe>",
+            "</section>",
+        ])
+    sections.append("</main></body></html>")
+    return "".join(sections)
 
 
 def _profile_data_quality(
@@ -446,7 +473,7 @@ def run_multi(
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
-        _safe_ydata_html(None, minimal=True),
+        _multi_table_ydata_html(cross_tables, minimal=True),
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
     )

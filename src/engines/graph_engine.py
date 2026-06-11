@@ -187,7 +187,10 @@ def reconstruct_graph(
         # Classify cardinality
         cardinality = classify_cardinality(child_df, child_column, parent_df, parent_column)
 
-        # PK runtime uniqueness check (v5.3)
+        # PK runtime uniqueness check. A non-unique parent key is still a
+        # data-quality error, but L3b safe-join can collapse the parent before
+        # merge, so the relationship edge remains visible for downstream
+        # evidence and guarded cross-table analysis.
         pk_unique = check_pk_uniqueness(parent_df, parent_column)
         if not pk_unique:
             duplicate_count = int(parent_df[parent_column].duplicated(keep=False).sum())
@@ -196,8 +199,9 @@ def reconstruct_graph(
                 non_unique_pk_tables.append(parent_table)
             warning = (
                 f"NON_UNIQUE_PARENT_PK: '{parent_table}.{parent_column}' "
-                f"has duplicate values; edge {child_table}.{child_column} -> "
-                f"{parent_table}.{parent_column} was skipped"
+                f"has duplicate values; safe join must collapse parent rows "
+                f"before using edge {child_table}.{child_column} -> "
+                f"{parent_table}.{parent_column}"
             )
             warnings.append(warning)
             integrity_errors.append(registry.register_integrity_error(IntegrityError(
@@ -214,7 +218,6 @@ def reconstruct_graph(
                 .head(10)
                 .to_dict(orient="records"),
             )))
-            continue
         role = classify_relationship_role(cardinality, child_table, parent_table)
 
         edges.append(GraphEdge(
