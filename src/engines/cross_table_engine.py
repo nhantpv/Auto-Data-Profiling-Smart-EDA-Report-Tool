@@ -337,6 +337,29 @@ def _relationship_exists(pair: CorrelationPairPlan, relationships: Iterable[Rela
     return False
 
 
+def _validate_measure_columns(pair: CorrelationPairPlan) -> list[str]:
+    reasons: list[str] = []
+    if pair.parent_table == pair.child_table:
+        reasons.append("same_table_pair")
+    if not pair.parent_value_column:
+        reasons.append("missing_parent_value_column")
+    elif pair.parent_value_column == pair.parent_column:
+        reasons.append("parent_value_column_matches_join_key")
+    elif _is_identifier_column(pair.parent_value_column):
+        reasons.append(f"identifier_parent_value_column:{pair.parent_value_column}")
+
+    if pair.aggregate_method == "count":
+        if pair.child_value_column:
+            reasons.append("child_value_column_must_be_null_for_count")
+    elif not pair.child_value_column:
+        reasons.append("missing_child_value_column_for_non_count")
+    elif pair.child_value_column == pair.child_column:
+        reasons.append("child_value_column_matches_join_key")
+    elif _is_identifier_column(pair.child_value_column):
+        reasons.append(f"identifier_child_value_column:{pair.child_value_column}")
+    return reasons
+
+
 def validate_llm_plan(
     plan: dict[str, Any] | LlmCorrelationPlan,
     tables_meta: dict[str, Any],
@@ -389,6 +412,7 @@ def validate_llm_plan(
             reasons.append(f"unsupported_aggregate:{pair.aggregate_method}")
         if not _relationship_exists(pair, relationships):
             reasons.append("relationship_not_in_schema_graph")
+        reasons.extend(_validate_measure_columns(pair))
 
         if reasons:
             skipped.append({"index": index, "pair": pair.model_dump(mode="json"), "reasons": reasons})
@@ -425,7 +449,11 @@ def _call_openai_plan(prompt: str) -> dict[str, Any]:
         "model": model,
         "instructions": (
             "Return JSON only. Select only statistically meaningful cross-table "
-            "correlation pairs from the deterministic schema evidence. Do not invent tables or columns."
+            "correlation pairs from the deterministic schema evidence. Use the exact "
+            "parent/child key path from the relationship graph, but never use PK, FK, "
+            "ID, code, uuid, or key-like columns as value/measure columns. Do not return "
+            "same-table pairs. If no meaningful numeric measure pair exists, return an "
+            "empty correlation_pairs array with skipped_pairs explaining why."
         ),
         "input": prompt,
         "max_output_tokens": 900,
@@ -470,15 +498,24 @@ async def llm_plan_correlations(
                 for table, meta in tables_meta.items()
             },
             "relationships": [rel.model_dump(mode="json") for rel in relationships],
+            "guardrails": [
+                "parent_column and child_column must exactly match one relationship in relationships.",
+                "parent_table and child_table must be different.",
+                "parent_value_column is required and must be a numeric non-identifier measure.",
+                "child_value_column is required for mean/sum/min/max/median and must be a numeric non-identifier measure.",
+                "For aggregate_method=count, set child_value_column to null.",
+                "Never use PK/FK/ID/code/uuid/key-like columns as value columns.",
+                "Return [] when no meaningful pair exists; do not force a correlation.",
+            ],
             "required_shape": {
                 "correlation_pairs": [
                     {
                         "parent_table": "table_name",
-                        "parent_column": "parent_key_column",
+                        "parent_column": "relationship_parent_key_column",
                         "child_table": "table_name",
-                        "child_column": "child_fk_column",
-                        "parent_value_column": "numeric_parent_measure_column_or_null",
-                        "child_value_column": "numeric_child_measure_column_or_null",
+                        "child_column": "relationship_child_fk_column",
+                        "parent_value_column": "required_numeric_parent_measure_column",
+                        "child_value_column": "numeric_child_measure_column_or_null_only_when_count",
                         "aggregate_method": "mean|sum|count|min|max|median",
                         "reasoning": "short evidence",
                         "confidence": "high|medium|low",

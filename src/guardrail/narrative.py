@@ -29,6 +29,7 @@ class GuardrailReport(BaseModel):
     provider: str
     used_fallback: bool = False
     llm_errors: list[str] = Field(default_factory=list)
+    agents: list[dict[str, Any]] = Field(default_factory=list)
     checked_numbers: list[str] = Field(default_factory=list)
     checked_references: list[str] = Field(default_factory=list)
     violations: list[GuardrailViolation] = Field(default_factory=list)

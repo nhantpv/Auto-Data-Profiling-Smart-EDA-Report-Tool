@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import urllib.error
@@ -18,10 +19,14 @@ from ontology.models import (
     CrossTableAnalysis,
     DataQualityFindings,
     DatasetVerdict,
+    DispatchResult,
     EditorOutput,
+    IntegrityError,
     IssueCluster,
     MultiAgentResult,
+    SEVERITY_ORDER,
     SchemaEvaluationFindings,
+    Severity,
 )
 from reporting.dispatcher import dispatch
 
@@ -32,6 +37,52 @@ def _pct(value: float) -> str:
 
 def _issue_scope(affected_column: str | None) -> str:
     return f"`{affected_column}`" if affected_column else "dataset"
+
+
+def _severity_rank(severity: Severity) -> int:
+    return SEVERITY_ORDER.index(severity)
+
+
+def _effective_severity(record: Any) -> Severity:
+    return record.compound_severity if record.compound_severity is not None else record.severity
+
+
+def _agent_detail(
+    agent: str,
+    report: GuardrailReport,
+    retry_count: int,
+    cluster: str | None = None,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "agent": agent,
+        "status": report.status,
+        "provider": report.provider,
+        "used_fallback": report.used_fallback,
+        "retry_count": retry_count,
+        "violations": [
+            violation.model_dump(mode="json")
+            for violation in report.violations
+        ],
+    }
+    if cluster is not None:
+        payload["cluster"] = cluster
+    if detail is not None:
+        payload["detail"] = detail
+    return payload
+
+
+def _strip_json_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_break = stripped.find("\n")
+    if first_break == -1:
+        return ""
+    stripped = stripped[first_break + 1:].strip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].strip()
+    return stripped
 
 
 def _compact_payload(
@@ -195,7 +246,10 @@ def _render_cluster_markdown(cluster: IssueCluster) -> str:
     return "\n".join(lines)
 
 
-async def _run_analyst(cluster: IssueCluster, llm_errors: list[str] | None = None) -> AnalystOutput:
+async def _run_analyst(
+    cluster: IssueCluster,
+    llm_errors: list[str] | None = None,
+) -> tuple[AnalystOutput, dict[str, Any]]:
     fallback_markdown = _render_cluster_markdown(cluster)
     llm_enabled = _llm_enabled()
 
@@ -229,11 +283,22 @@ async def _run_analyst(cluster: IssueCluster, llm_errors: list[str] | None = Non
                 used_fallback=False,
             )
             if report.status == "passed":
-                return AnalystOutput(
+                output = AnalystOutput(
                     cluster_type=cluster.issue_type,
                     markdown=markdown,
                     guardrail_passed=True,
                     retry_count=attempt - 1,
+                )
+                return output, _agent_detail(
+                    "analyst",
+                    report,
+                    attempt - 1,
+                    cluster=cluster.issue_type,
+                )
+            if llm_errors is not None:
+                violation_checks = ",".join(violation.check for violation in report.violations)
+                llm_errors.append(
+                    f"analyst:{cluster.issue_type}:attempt_{attempt}: guardrail_failed:{violation_checks}"
                 )
 
     report = verify_analyst_output(
@@ -243,11 +308,17 @@ async def _run_analyst(cluster: IssueCluster, llm_errors: list[str] | None = Non
         used_fallback=llm_enabled,
     )
 
-    return AnalystOutput(
+    output = AnalystOutput(
         cluster_type=cluster.issue_type,
         markdown=fallback_markdown,
         guardrail_passed=report.status == "passed",
         retry_count=3 if llm_enabled else 0,
+    )
+    return output, _agent_detail(
+        "analyst",
+        report,
+        output.retry_count,
+        cluster=cluster.issue_type,
     )
 
 
@@ -276,7 +347,7 @@ async def _run_editor(
     analyst_outputs: list[AnalystOutput],
     cross_table_analysis: CrossTableAnalysis | None,
     llm_errors: list[str] | None = None,
-) -> EditorOutput:
+) -> tuple[EditorOutput, dict[str, Any]]:
     meta = verdict.dataset_meta
     fallback = EditorOutput(
         executive_summary=(
@@ -312,7 +383,7 @@ async def _run_editor(
                     "SMART_EDA_L4_EDITOR_MODEL",
                     "gpt-4o",
                 )
-                candidate = EditorOutput.model_validate_json(text)
+                candidate = EditorOutput.model_validate_json(_strip_json_fences(text))
             except Exception as exc:
                 if llm_errors is not None:
                     llm_errors.append(f"editor:attempt_{attempt}: {exc}")
@@ -327,7 +398,10 @@ async def _run_editor(
             if report.status == "passed":
                 candidate.guardrail_passed = True
                 candidate.retry_count = attempt - 1
-                return candidate
+                return candidate, _agent_detail("editor", report, attempt - 1)
+            if llm_errors is not None:
+                violation_checks = ",".join(violation.check for violation in report.violations)
+                llm_errors.append(f"editor:attempt_{attempt}: guardrail_failed:{violation_checks}")
 
     report = verify_editor_output(
         fallback.model_dump(mode="json"),
@@ -338,16 +412,77 @@ async def _run_editor(
     )
     fallback.guardrail_passed = report.status == "passed"
     fallback.retry_count = 3 if llm_enabled else 0
-    return fallback
+    return fallback, _agent_detail("editor", report, fallback.retry_count)
 
 
-def _render_appendix_html(dispatch_result) -> str:
-    if dispatch_result.remainder_count <= 0:
+def _appendix_scope(record: Any) -> str:
+    if record.affected_column:
+        if isinstance(record, IntegrityError):
+            return f"{record.affected_table}.{record.affected_column}"
+        return record.affected_column
+    if isinstance(record, IntegrityError):
+        return record.affected_table
+    return "dataset"
+
+
+def _appendix_type(record: Any) -> str:
+    return record.error_type if isinstance(record, IntegrityError) else record.issue_type
+
+
+def _render_appendix_html(
+    dispatch_result: DispatchResult,
+    findings: DataQualityFindings | None,
+    schema: SchemaEvaluationFindings | None,
+) -> str:
+    covered_types = {cluster.issue_type for cluster in dispatch_result.top_clusters}
+    warn_rank = _severity_rank(Severity.WARN)
+    rows: list[tuple[int, str, str, str, int, str]] = []
+
+    records = [
+        *(findings.anomalies if findings is not None else []),
+        *(schema.integrity_errors if schema is not None else []),
+    ]
+    for record in records:
+        issue_type = _appendix_type(record)
+        severity = _effective_severity(record)
+        if _severity_rank(severity) < warn_rank:
+            continue
+        if issue_type in covered_types:
+            continue
+        source = "schema" if isinstance(record, IntegrityError) else "data_quality"
+        rows.append((
+            _severity_rank(severity),
+            severity.value,
+            issue_type,
+            _appendix_scope(record),
+            int(record.affected_count),
+            source,
+        ))
+
+    if not rows:
         return ""
+
+    rows.sort(key=lambda row: (-row[0], row[2], row[3]))
+    body = "".join(
+        "<tr>"
+        f"<td>{html.escape(severity)}</td>"
+        f"<td>{html.escape(issue_type)}</td>"
+        f"<td>{html.escape(scope)}</td>"
+        f"<td>{affected_count}</td>"
+        f"<td>{html.escape(source)}</td>"
+        "</tr>"
+        for _rank, severity, issue_type, scope, affected_count, source in rows
+    )
     return (
         "<section class=\"appendix\">"
         "<h2>Appendix</h2>"
-        "<p>Additional lower-ranked findings are available in the JSON artifacts.</p>"
+        "<p>Lower-ranked findings not expanded by Analyst agents.</p>"
+        "<table>"
+        "<thead><tr>"
+        "<th>Severity</th><th>Type</th><th>Scope</th><th>Affected</th><th>Source</th>"
+        "</tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
         "</section>"
     )
 
@@ -413,16 +548,19 @@ async def run_multi_agent_l4(
         schema.integrity_errors if schema is not None else [],
     )
     llm_errors: list[str] = []
-    analyst_outputs = await asyncio.gather(*[
+    analyst_results = await asyncio.gather(*[
         _run_analyst(cluster, llm_errors)
         for cluster in dispatch_result.top_clusters
     ])
-    editor_output = await _run_editor(
+    analyst_outputs = [output for output, _detail in analyst_results]
+    agent_details = [detail for _output, detail in analyst_results]
+    editor_output, editor_detail = await _run_editor(
         verdict,
         list(analyst_outputs),
         cross_table_analysis,
         llm_errors,
     )
+    agent_details.append(editor_detail)
     llm_enabled = _llm_enabled()
     used_fallback = (
         not llm_enabled
@@ -432,7 +570,7 @@ async def run_multi_agent_l4(
     result = MultiAgentResult(
         analyst_outputs=list(analyst_outputs),
         editor_output=editor_output,
-        appendix_html=_render_appendix_html(dispatch_result),
+        appendix_html=_render_appendix_html(dispatch_result, findings, schema),
         guardrail_report={},
         used_fallback=used_fallback,
     )
@@ -446,6 +584,7 @@ async def run_multi_agent_l4(
         used_fallback=result.used_fallback,
     )
     report.llm_errors = llm_errors
+    report.agents = agent_details
     if report.status != "passed":
         text = render_deterministic_l4_report(findings, verdict, schema)
         report = validate_narrative(
@@ -457,6 +596,7 @@ async def run_multi_agent_l4(
             used_fallback=True,
         )
         report.llm_errors = llm_errors
+        report.agents = agent_details
         result.used_fallback = True
     result.guardrail_report = report.model_dump(mode="json")
     return text, report, result
@@ -486,6 +626,14 @@ def _run_multi_agent_sync(
     )
     report.llm_errors = [
         "L4 was called from an active event loop; deterministic fallback was used."
+    ]
+    report.agents = [
+        _agent_detail(
+            "runtime",
+            report,
+            retry_count=0,
+            detail="active_event_loop_deterministic_fallback",
+        )
     ]
     result = MultiAgentResult(
         editor_output=EditorOutput(

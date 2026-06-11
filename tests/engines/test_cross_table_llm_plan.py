@@ -22,15 +22,19 @@ def test_validate_llm_plan_rejects_unknown_pairs():
             {
                 "parent_table": "users",
                 "parent_column": "id",
+                "parent_value_column": "credit_score",
                 "child_table": "orders",
                 "child_column": "user_id",
+                "child_value_column": "total",
                 "aggregate_method": "mean",
             },
             {
                 "parent_table": "users",
                 "parent_column": "missing",
+                "parent_value_column": "credit_score",
                 "child_table": "orders",
                 "child_column": "user_id",
+                "child_value_column": "total",
                 "aggregate_method": "mean",
             },
         ]
@@ -38,12 +42,58 @@ def test_validate_llm_plan_rejects_unknown_pairs():
 
     plan = validate_llm_plan(
         raw_plan,
-        {"users": ["id"], "orders": ["user_id"]},
+        {"users": ["id", "credit_score"], "orders": ["user_id", "total"]},
         [_relationship()],
     )
 
     assert len(plan.correlation_pairs) == 1
     assert plan.skipped_pairs
+
+
+def test_validate_llm_plan_rejects_identifier_measures_and_same_table():
+    same_table_relationship = RelationshipInfo(
+        child_table="users",
+        child_column="manager_id",
+        parent_table="users",
+        parent_column="id",
+        relationship_type="inferred_fk",
+        status="inferred",
+        confidence=0.95,
+    )
+    raw_plan = {
+        "correlation_pairs": [
+            {
+                "parent_table": "users",
+                "parent_column": "id",
+                "parent_value_column": "id",
+                "child_table": "orders",
+                "child_column": "user_id",
+                "child_value_column": "order_id",
+                "aggregate_method": "mean",
+            },
+            {
+                "parent_table": "users",
+                "parent_column": "id",
+                "parent_value_column": "credit_score",
+                "child_table": "users",
+                "child_column": "manager_id",
+                "child_value_column": "salary",
+                "aggregate_method": "mean",
+            },
+        ]
+    }
+
+    plan = validate_llm_plan(
+        raw_plan,
+        {"users": ["id", "manager_id", "credit_score", "salary"], "orders": ["user_id", "order_id"]},
+        [_relationship(), same_table_relationship],
+    )
+
+    assert not plan.correlation_pairs
+    reasons = [reason for item in plan.skipped_pairs for reason in item["reasons"]]
+    assert "parent_value_column_matches_join_key" in reasons
+    assert "identifier_child_value_column:order_id" in reasons
+    assert "same_table_pair" in reasons
 
 
 def test_compute_planned_correlations_returns_numeric_pairs():
@@ -54,20 +104,28 @@ def test_compute_planned_correlations_returns_numeric_pairs():
                 {
                     "parent_table": "users",
                     "parent_column": "id",
+                    "parent_value_column": "credit_score",
                     "child_table": "orders",
                     "child_column": "user_id",
+                    "child_value_column": "total",
                     "aggregate_method": "mean",
                 }
             ]
         },
-        {"users": ["id"], "orders": ["user_id"]},
+        {"users": ["id", "credit_score"], "orders": ["user_id", "total"]},
         [_relationship()],
     )
 
     records = compute_planned_correlations(
         {
-            "users": pd.DataFrame({"id": list(range(1, n + 1))}),
-            "orders": pd.DataFrame({"user_id": list(range(1, n + 1))}),
+            "users": pd.DataFrame({
+                "id": list(range(1, n + 1)),
+                "credit_score": [float(i) for i in range(1, n + 1)],
+            }),
+            "orders": pd.DataFrame({
+                "user_id": list(range(1, n + 1)),
+                "total": [float(i) for i in range(1, n + 1)],
+            }),
         },
         plan,
     )
