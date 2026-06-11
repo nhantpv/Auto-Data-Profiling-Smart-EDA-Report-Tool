@@ -362,14 +362,38 @@ function renderDataQualityPanel(payload) {
 
 function renderSchemaPanel(payload) {
   const schema = payload.schema_evaluation_findings || {};
+  const gate = payload.schema_gate || {};
+  const graph = payload.relationship_graph || {};
   const relationships = schema.relationships || [];
   const errors = schema.integrity_errors || [];
   const panel = createPanel("Schema & Relationships", "Inferred or explicit table relationships and schema issues.");
+
+  if (gate.schema_version || graph.edges) {
+    const facts = document.createElement("div");
+    facts.className = "fact-grid";
+    [
+      ["Gate mode", gate.mode || "-"],
+      ["Schema status", gate.schema_status || "-"],
+      ["Fact table", gate.fact_table || "-"],
+      ["Graph edges", formatInteger((graph.edges || []).length)],
+      ["Graph warnings", formatInteger((graph.warnings || []).length)],
+      ["Skipped PKs", formatInteger((graph.non_unique_pk_tables || []).length)],
+    ].forEach(([label, value]) => {
+      const item = document.createElement("div");
+      item.appendChild(textEl("span", "", label));
+      item.appendChild(textEl("strong", "", value));
+      facts.appendChild(item);
+    });
+    panel.appendChild(facts);
+  }
+
   panel.appendChild(makeTable(
     [
       { label: "Status", key: "status" },
       { label: "Decision", render: (rel) => rel.decision || "-" },
       { label: "Bucket", render: (rel) => rel.confidence_bucket || "-" },
+      { label: "Cardinality", render: (rel) => rel.cardinality || "-" },
+      { label: "Role", render: (rel) => rel.role || "-" },
       {
         label: "Relationship",
         render: (rel) => `${rel.child_table}.${rel.child_column} -> ${rel.parent_table}.${rel.parent_column}`,
@@ -379,6 +403,24 @@ function renderSchemaPanel(payload) {
     relationships.slice(0, 10),
     "No relationships emitted."
   ));
+
+  if ((graph.edges || []).length) {
+    const graphHeading = textEl("h4", "", "Relationship graph");
+    panel.appendChild(graphHeading);
+    panel.appendChild(makeTable(
+      [
+        { label: "Cardinality", key: "cardinality" },
+        { label: "Role", key: "role" },
+        {
+          label: "Edge",
+          render: (edge) => `${edge.child_table}.${edge.child_column} -> ${edge.parent_table}.${edge.parent_column}`,
+        },
+        { label: "PK unique", render: (edge) => edge.pk_runtime_unique ? "yes" : "no" },
+      ],
+      graph.edges || [],
+      "No graph edges emitted."
+    ));
+  }
 
   if (errors.length) {
     const subheading = textEl("h4", "", "Schema issues");

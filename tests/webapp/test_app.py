@@ -148,6 +148,33 @@ def test_multi_job_without_schema_infers_relationships(tmp_path, monkeypatch):
     assert "schema_evaluation_findings.json" in payload["files"]
 
 
+def test_multi_job_accepts_confirmed_schema_and_fact_table(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch)
+
+    def fake_run_multi(data_paths, out_dir, schema_path=None, confirmed_schema_path=None, fact_table=None):
+        assert len(data_paths) == 2
+        assert schema_path is None
+        assert Path(confirmed_schema_path).suffix == ".json"
+        assert fact_table == "orders"
+        _write_outputs(out_dir, include_dq=False, include_schema=True)
+        return {}
+
+    monkeypatch.setattr(web_app.run_pipeline, "run_multi", fake_run_multi)
+    response = client.post(
+        "/api/jobs/multi",
+        files=[
+            ("data_files", ("users.csv", b"id\n1\n", "text/csv")),
+            ("data_files", ("orders.csv", b"id,user_id\n10,1\n", "text/csv")),
+            ("confirmed_schema_file", ("confirmed.json", b'{"fact_table":"orders"}', "application/json")),
+        ],
+        data={"fact_table": "orders"},
+    )
+
+    assert response.status_code == 202
+    payload = _await_job(client, response.json())
+    assert payload["status"] == "completed"
+
+
 def test_rejects_unsupported_upload(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
     response = client.post(

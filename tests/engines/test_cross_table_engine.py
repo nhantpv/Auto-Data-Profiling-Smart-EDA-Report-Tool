@@ -19,14 +19,15 @@ def _rel(child_table="orders", child_column="user_id", parent_table="users", par
 
 
 def test_safe_join_preserves_fact_rows_and_exports_preview(tmp_path):
+    n = 40
     orders = pd.DataFrame({
-        "order_id": [101, 102, 103, 104],
-        "user_id": [1, 2, 2, 3],
-        "total": [10.0, 20.0, 30.0, 40.0],
+        "order_id": range(100, 100 + n),
+        "user_id": list(range(1, n + 1)),
+        "total": [float(i * 10) for i in range(1, n + 1)],
     })
     users = pd.DataFrame({
-        "id": [1, 2, 3],
-        "credit_score": [100, 200, 300],
+        "id": list(range(1, n + 1)),
+        "credit_score": [float(i * 100) for i in range(1, n + 1)],
     })
 
     analysis = run_cross_table_analysis({"orders": orders, "users": users}, [_rel()], tmp_path)

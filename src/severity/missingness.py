@@ -13,11 +13,13 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import cross_val_score
+from config.threshold_registry import ThresholdRegistry
 
 logger = logging.getLogger(__name__)
 
-_MAR_AUC_GATE = 0.65   # AUC above which we label a column MAR (ARCHITECT v5.4)
-_MCAR_ALPHA = 0.05     # Diagnostic only; Little's test does not drive labels.
+_THRESHOLDS = ThresholdRegistry()
+_MAR_AUC_GATE = _THRESHOLDS.get("mar_auc_gate")
+_MCAR_ALPHA = _THRESHOLDS.get("mcar_alpha")
 _MAX_MISSINGNESS_ROWS = 10_000
 _SAMPLE_RANDOM_STATE = 42
 

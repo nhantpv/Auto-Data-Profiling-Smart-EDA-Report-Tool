@@ -10,7 +10,7 @@
   },
   "completeness": {
     "metric": "p_missing",
-    "basis": "heuristic_v0; escalated by MAR/MNAR missingness mechanism",
+    "basis": "heuristic_v0; escalated only by MAR missingness mechanism; MNAR is not asserted from observed data",
     "thresholds": [
       {"max": 0.05, "severity": "INFO"},
       {"max": 0.20, "severity": "WARN"},

@@ -57,6 +57,16 @@ def test_guardrail_rejects_causal_language():
     assert any(v.check == "causation_language_ban" for v in report.violations)
 
 
+def test_guardrail_allows_numeric_tolerance_and_year_passthrough():
+    report = validate_narrative(
+        "Dataset `data.csv` has `12.00001` rows, `16.67%` duplicates, and was reviewed in `2026`.",
+        _findings(),
+        _verdict(),
+    )
+
+    assert report.status == "passed"
+
+
 def test_generated_l4_report_passes_guardrail(monkeypatch):
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
 

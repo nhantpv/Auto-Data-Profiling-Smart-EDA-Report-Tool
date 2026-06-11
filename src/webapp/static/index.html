@@ -63,6 +63,14 @@
               <span>Schema file</span>
               <input name="schema_file" type="file" accept=".dbml,.sql" />
             </label>
+            <label class="field">
+              <span>Confirmed schema JSON</span>
+              <input name="confirmed_schema_file" type="file" accept=".json" />
+            </label>
+            <label class="field">
+              <span>Fact table</span>
+              <input class="text-input" name="fact_table" type="text" placeholder="orders" autocomplete="off" />
+            </label>
             <button class="primary-action" type="submit">
               <span class="action-symbol">&gt;</span>
               Run multi-table pipeline

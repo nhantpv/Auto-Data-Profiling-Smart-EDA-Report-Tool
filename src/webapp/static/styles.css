@@ -304,6 +304,16 @@ input[type="file"] {
   color: var(--text-secondary);
 }
 
+.text-input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 0 11px;
+  background: #fbfcfc;
+  color: var(--text);
+}
+
 .switch-row {
   display: flex;
   align-items: center;

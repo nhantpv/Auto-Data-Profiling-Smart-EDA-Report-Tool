@@ -47,6 +47,7 @@ def test_validate_llm_plan_rejects_unknown_pairs():
 
 
 def test_compute_planned_correlations_returns_numeric_pairs():
+    n = 40
     plan = validate_llm_plan(
         {
             "correlation_pairs": [
@@ -65,10 +66,50 @@ def test_compute_planned_correlations_returns_numeric_pairs():
 
     records = compute_planned_correlations(
         {
-            "users": pd.DataFrame({"id": [1, 2, 3, 4]}),
-            "orders": pd.DataFrame({"user_id": [1, 2, 3, 4]}),
+            "users": pd.DataFrame({"id": list(range(1, n + 1))}),
+            "orders": pd.DataFrame({"user_id": list(range(1, n + 1))}),
         },
         plan,
     )
 
     assert records[0].coefficient == 1.0
+    assert records[0].method == "pearson_aggregate_before_join_mean"
+
+
+def test_compute_planned_correlations_uses_measure_columns_before_join():
+    n = 40
+    plan = validate_llm_plan(
+        {
+            "correlation_pairs": [
+                {
+                    "parent_table": "users",
+                    "parent_column": "id",
+                    "parent_value_column": "credit_score",
+                    "child_table": "orders",
+                    "child_column": "user_id",
+                    "child_value_column": "total",
+                    "aggregate_method": "sum",
+                }
+            ]
+        },
+        {"users": ["id", "credit_score"], "orders": ["user_id", "total"]},
+        [_relationship()],
+    )
+
+    records = compute_planned_correlations(
+        {
+            "users": pd.DataFrame({
+                "id": list(range(1, n + 1)),
+                "credit_score": [float(i) for i in range(1, n + 1)],
+            }),
+            "orders": pd.DataFrame({
+                "user_id": list(range(1, n + 1)),
+                "total": [float(i * 10) for i in range(1, n + 1)],
+            }),
+        },
+        plan,
+    )
+
+    assert records
+    assert records[0].left_feature == "users.credit_score"
+    assert records[0].right_feature == "orders.sum(total)_by_user_id"

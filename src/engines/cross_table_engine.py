@@ -11,6 +11,7 @@ from typing import Any, Iterable
 import pandas as pd
 import pandas.api.types as pt
 
+from config.threshold_registry import ThresholdRegistry
 from ontology.models import (
     CorrelationPairPlan,
     CrossTableAnalysis,
@@ -23,6 +24,7 @@ from ontology.models import (
 
 _JOIN_KEY = "__smart_eda_join_key"
 _ID_TOKENS = {"id", "uuid", "key", "code"}
+_THRESHOLDS = ThresholdRegistry()
 
 
 def _normalise_join_value(value) -> str | None:
@@ -246,21 +248,23 @@ def _safe_join(
 def _numeric_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     numeric: dict[str, pd.Series] = {}
     excluded: list[str] = []
+    null_gate = _THRESHOLDS.get("null_overlap_gate")
+    parse_gate = _THRESHOLDS.get("numeric_parse_rate_gate")
     for column in df.columns:
         if _is_identifier_column(column):
             excluded.append(f"{column}: identifier-like column excluded from correlation")
             continue
         null_rate = float(df[column].isna().mean()) if len(df) else 1.0
-        if null_rate > 0.70:
-            excluded.append(f"{column}: null_rate>{0.70:.2f} after safe join")
+        if null_rate > null_gate:
+            excluded.append(f"{column}: null_rate>{null_gate:.2f} after safe join")
             continue
         if pt.is_numeric_dtype(df[column]):
             values = pd.to_numeric(df[column], errors="coerce")
         else:
             values = pd.to_numeric(df[column], errors="coerce")
             parse_rate = float(values.notna().mean()) if len(values) else 0.0
-            if parse_rate < 0.80:
-                excluded.append(f"{column}: non-numeric or parse_rate<0.80")
+            if parse_rate < parse_gate:
+                excluded.append(f"{column}: non-numeric or parse_rate<{parse_gate:.2f}")
                 continue
         if values.nunique(dropna=True) <= 1:
             excluded.append(f"{column}: constant or empty numeric feature")
@@ -273,6 +277,7 @@ def _correlations(df: pd.DataFrame, limit: int = 25) -> list[CrossTableCorrelati
     numeric, _ = _numeric_feature_frame(df)
     records: list[CrossTableCorrelation] = []
     columns = list(numeric.columns)
+    min_n = int(_THRESHOLDS.get("cross_table_min_n"))
     for left_index, left in enumerate(columns):
         for right in columns[left_index + 1:]:
             left_table = _source_table(left)
@@ -280,7 +285,7 @@ def _correlations(df: pd.DataFrame, limit: int = 25) -> list[CrossTableCorrelati
             if left_table == right_table:
                 continue
             pair = numeric[[left, right]].dropna()
-            if len(pair) < 3:
+            if len(pair) < min_n:
                 continue
             coefficient = pair[left].corr(pair[right], method="pearson")
             if pd.isna(coefficient):
@@ -368,6 +373,18 @@ def validate_llm_plan(
             reasons.append(f"unknown_parent_column:{pair.parent_table}.{pair.parent_column}")
         if pair.child_table in table_columns and pair.child_column not in table_columns[pair.child_table]:
             reasons.append(f"unknown_child_column:{pair.child_table}.{pair.child_column}")
+        if (
+            pair.parent_value_column
+            and pair.parent_table in table_columns
+            and pair.parent_value_column not in table_columns[pair.parent_table]
+        ):
+            reasons.append(f"unknown_parent_value_column:{pair.parent_table}.{pair.parent_value_column}")
+        if (
+            pair.child_value_column
+            and pair.child_table in table_columns
+            and pair.child_value_column not in table_columns[pair.child_table]
+        ):
+            reasons.append(f"unknown_child_value_column:{pair.child_table}.{pair.child_value_column}")
         if pair.aggregate_method not in allowed_methods:
             reasons.append(f"unsupported_aggregate:{pair.aggregate_method}")
         if not _relationship_exists(pair, relationships):
@@ -457,9 +474,11 @@ async def llm_plan_correlations(
                 "correlation_pairs": [
                     {
                         "parent_table": "table_name",
-                        "parent_column": "column_name",
+                        "parent_column": "parent_key_column",
                         "child_table": "table_name",
-                        "child_column": "column_name",
+                        "child_column": "child_fk_column",
+                        "parent_value_column": "numeric_parent_measure_column_or_null",
+                        "child_value_column": "numeric_child_measure_column_or_null",
                         "aggregate_method": "mean|sum|count|min|max|median",
                         "reasoning": "short evidence",
                         "confidence": "high|medium|low",
@@ -506,52 +525,111 @@ def _llm_plan_correlations_sync(
     )
 
 
+def _compute_one_planned_correlation(
+    tables: dict[str, pd.DataFrame],
+    pair: CorrelationPairPlan,
+) -> tuple[CrossTableCorrelation | None, str | None]:
+    """Compute one L3b planned pair with aggregate-before-join semantics."""
+    parent = tables.get(pair.parent_table)
+    child = tables.get(pair.child_table)
+    if parent is None or child is None:
+        return None, "missing_table"
+    if pair.parent_column not in parent.columns or pair.child_column not in child.columns:
+        return None, "missing_relationship_column"
+
+    parent_value_column = pair.parent_value_column or pair.parent_column
+    child_value_column = pair.child_value_column or pair.child_column
+    if parent_value_column not in parent.columns:
+        return None, f"missing_parent_value_column:{parent_value_column}"
+    if child_value_column not in child.columns:
+        return None, f"missing_child_value_column:{child_value_column}"
+
+    min_n = int(_THRESHOLDS.get("cross_table_min_n"))
+    null_gate = _THRESHOLDS.get("null_overlap_gate")
+
+    parent_frame = pd.DataFrame({
+        _JOIN_KEY: _normalise_key(parent[pair.parent_column]),
+        "parent_value": pd.to_numeric(parent[parent_value_column], errors="coerce"),
+    })
+    parent_frame = parent_frame[parent_frame[_JOIN_KEY].notna()].copy()
+    parent_frame = parent_frame.groupby(_JOIN_KEY, as_index=False, dropna=True).first()
+    if parent_frame.empty:
+        return None, "empty_parent_key_frame"
+
+    child_keys = _normalise_key(child[pair.child_column])
+    child_frame = pd.DataFrame({_JOIN_KEY: child_keys})
+    if pair.aggregate_method == "count":
+        child_agg = (
+            child_frame[child_frame[_JOIN_KEY].notna()]
+            .groupby(_JOIN_KEY, dropna=True)
+            .size()
+            .reset_index(name="child_value")
+        )
+    else:
+        child_frame["child_value"] = pd.to_numeric(child[child_value_column], errors="coerce")
+        child_frame = child_frame[child_frame[_JOIN_KEY].notna()].copy()
+        agg_method = pair.aggregate_method
+        child_agg = child_frame.groupby(_JOIN_KEY, as_index=False, dropna=True)["child_value"].agg(agg_method)
+
+    merged = parent_frame.merge(child_agg, how="left", on=_JOIN_KEY, sort=False)
+    null_rate = float(merged["child_value"].isna().mean()) if len(merged) else 1.0
+    if null_rate > null_gate:
+        return None, f"null_overlap>{null_gate:.2f}"
+
+    frame = merged[["parent_value", "child_value"]].dropna()
+    if len(frame) < min_n:
+        return None, f"n<{min_n}"
+    if frame["parent_value"].nunique(dropna=True) <= 1 or frame["child_value"].nunique(dropna=True) <= 1:
+        return None, "constant_or_empty_numeric_feature"
+
+    coefficient = frame["parent_value"].corr(frame["child_value"], method="pearson")
+    if pd.isna(coefficient):
+        return None, "correlation_nan"
+    coefficient = round(float(coefficient), 4)
+    return CrossTableCorrelation(
+        left_feature=f"{pair.parent_table}.{parent_value_column}",
+        right_feature=(
+            f"{pair.child_table}.{pair.aggregate_method}({child_value_column})"
+            f"_by_{pair.child_column}"
+        ),
+        left_table=pair.parent_table,
+        right_table=pair.child_table,
+        method=f"pearson_aggregate_before_join_{pair.aggregate_method}",
+        coefficient=coefficient,
+        abs_coefficient=round(abs(coefficient), 4),
+        n=int(len(frame)),
+    ), None
+
+
+def _compute_planned_correlations_with_warnings(
+    tables: dict[str, pd.DataFrame],
+    plan: LlmCorrelationPlan,
+    limit: int = 25,
+) -> tuple[list[CrossTableCorrelation], list[str]]:
+    records: list[CrossTableCorrelation] = []
+    warnings: list[str] = []
+    for pair in plan.correlation_pairs:
+        record, reason = _compute_one_planned_correlation(tables, pair)
+        if record is None:
+            warnings.append(
+                "planned_pair_skipped:"
+                f"{pair.parent_table}.{pair.parent_column}->"
+                f"{pair.child_table}.{pair.child_column}:{reason}"
+            )
+            continue
+        records.append(record)
+    records.sort(key=lambda item: (item.abs_coefficient, item.n), reverse=True)
+    return records[:limit], warnings
+
+
 def compute_planned_correlations(
     tables: dict[str, pd.DataFrame],
     plan: LlmCorrelationPlan,
     limit: int = 25,
 ) -> list[CrossTableCorrelation]:
-    """Phase 2: compute validated LLM-selected numeric correlations.
-
-    MVP implementation is conservative: it computes Pearson only when both
-    selected columns are numeric/parseable and there are at least 3 row-aligned
-    observations. Unsafe joins are left to ``run_cross_table_analysis``.
-    """
-    records: list[CrossTableCorrelation] = []
-    for pair in plan.correlation_pairs:
-        parent = tables.get(pair.parent_table)
-        child = tables.get(pair.child_table)
-        if parent is None or child is None:
-            continue
-        if pair.parent_column not in parent.columns or pair.child_column not in child.columns:
-            continue
-        left = pd.to_numeric(parent[pair.parent_column], errors="coerce").reset_index(drop=True)
-        right = pd.to_numeric(child[pair.child_column], errors="coerce").reset_index(drop=True)
-        n = min(len(left), len(right))
-        if n < 3:
-            continue
-        frame = pd.DataFrame({
-            "left": left.iloc[:n],
-            "right": right.iloc[:n],
-        }).dropna()
-        if len(frame) < 3 or frame["left"].nunique() <= 1 or frame["right"].nunique() <= 1:
-            continue
-        coefficient = frame["left"].corr(frame["right"], method="pearson")
-        if pd.isna(coefficient):
-            continue
-        coefficient = round(float(coefficient), 4)
-        records.append(CrossTableCorrelation(
-            left_feature=f"{pair.parent_table}.{pair.parent_column}",
-            right_feature=f"{pair.child_table}.{pair.child_column}",
-            left_table=pair.parent_table,
-            right_table=pair.child_table,
-            method=f"pearson_row_aligned_{pair.aggregate_method}",
-            coefficient=coefficient,
-            abs_coefficient=round(abs(coefficient), 4),
-            n=int(len(frame)),
-        ))
-    records.sort(key=lambda item: (item.abs_coefficient, item.n), reverse=True)
-    return records[:limit]
+    """Phase 2: deterministic aggregate-before-join compute for validated LLM pairs."""
+    records, _warnings = _compute_planned_correlations_with_warnings(tables, plan, limit)
+    return records
 
 
 def run_cross_table_analysis(
@@ -563,7 +641,8 @@ def run_cross_table_analysis(
 ) -> CrossTableAnalysis:
     warnings: list[str] = []
     llm_plan = _llm_plan_correlations_sync(tables, relationships)
-    planned_correlations = compute_planned_correlations(tables, llm_plan)
+    planned_correlations, planned_warnings = _compute_planned_correlations_with_warnings(tables, llm_plan)
+    warnings.extend(planned_warnings[:25])
     if llm_plan.skipped_pairs:
         warnings.append(f"L3b planner skipped {len(llm_plan.skipped_pairs)} pair(s).")
     if planned_correlations:

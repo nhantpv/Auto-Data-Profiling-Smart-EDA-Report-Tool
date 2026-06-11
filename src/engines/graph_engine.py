@@ -14,9 +14,12 @@ import pandas as pd
 from ontology.models import (
     GraphEdge,
     GraphResult,
+    IntegrityError,
     RelationshipInfo,
     SchemaEvaluationFindings,
+    Severity,
 )
+from ontology.finding_registry import FindingRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,59 @@ def classify_cardinality(
     return "N:N"
 
 
+def classify_relationship_role(cardinality: str, child_table: str, parent_table: str) -> str:
+    """Classify the role of an accepted relationship edge.
+
+    L2c does not force a single global fact table.  The role is local to this
+    edge and describes how the child side should be interpreted by downstream
+    cross-table analysis.
+    """
+    if cardinality == "1:N":
+        return "fact_to_dimension"
+    if cardinality == "1:1":
+        return "one_to_one"
+    if cardinality == "N:N":
+        return "invalid_many_to_many"
+    return "unknown"
+
+
+def _relationship_key(
+    child_table: str,
+    child_column: str,
+    parent_table: str,
+    parent_column: str,
+) -> tuple[str, str, str, str]:
+    return (
+        child_table.lower(),
+        child_column.lower(),
+        parent_table.lower(),
+        parent_column.lower(),
+    )
+
+
+def accepted_relationships_from_graph(
+    relationships: list[RelationshipInfo],
+    graph: GraphResult,
+) -> list[RelationshipInfo]:
+    """Return relationships that survived L2c runtime graph checks."""
+    edge_by_key = {
+        _relationship_key(edge.child_table, edge.child_column, edge.parent_table, edge.parent_column): edge
+        for edge in graph.edges
+    }
+    accepted: list[RelationshipInfo] = []
+    for rel in relationships:
+        edge = edge_by_key.get(
+            _relationship_key(rel.child_table, rel.child_column, rel.parent_table, rel.parent_column)
+        )
+        if edge is None:
+            continue
+        accepted.append(rel.model_copy(update={
+            "cardinality": edge.cardinality,
+            "role": edge.role,
+        }))
+    return accepted
+
+
 def reconstruct_graph(
     tables: dict[str, pd.DataFrame],
     schema: SchemaEvaluationFindings | None = None,
@@ -98,9 +154,11 @@ def reconstruct_graph(
         )
 
     edges: list[GraphEdge] = []
+    integrity_errors: list[IntegrityError] = []
     warnings: list[str] = []
     non_unique_pk_tables: list[str] = []
     seen_non_unique: set[str] = set()
+    registry = FindingRegistry()
 
     for rel in schema.relationships:
         child_table = rel.child_table
@@ -131,13 +189,33 @@ def reconstruct_graph(
 
         # PK runtime uniqueness check (v5.3)
         pk_unique = check_pk_uniqueness(parent_df, parent_column)
-        if not pk_unique and parent_table not in seen_non_unique:
-            seen_non_unique.add(parent_table)
-            non_unique_pk_tables.append(parent_table)
-            warnings.append(
+        if not pk_unique:
+            duplicate_count = int(parent_df[parent_column].duplicated(keep=False).sum())
+            if parent_table not in seen_non_unique:
+                seen_non_unique.add(parent_table)
+                non_unique_pk_tables.append(parent_table)
+            warning = (
                 f"NON_UNIQUE_PARENT_PK: '{parent_table}.{parent_column}' "
-                f"has duplicate values — join may inflate rows"
+                f"has duplicate values; edge {child_table}.{child_column} -> "
+                f"{parent_table}.{parent_column} was skipped"
             )
+            warnings.append(warning)
+            integrity_errors.append(registry.register_integrity_error(IntegrityError(
+                error_type="NON_UNIQUE_PARENT_PK",
+                description=warning,
+                severity=Severity.CRITICAL,
+                affected_table=parent_table,
+                affected_column=parent_column,
+                affected_count=duplicate_count,
+                dq_dimensions=["Uniqueness"],
+                ml_impact=["join_fanout", "cross_table_correlation_bias"],
+                relationship=rel,
+                top_10_samples=parent_df[parent_df[parent_column].duplicated(keep=False)]
+                .head(10)
+                .to_dict(orient="records"),
+            )))
+            continue
+        role = classify_relationship_role(cardinality, child_table, parent_table)
 
         edges.append(GraphEdge(
             child_table=child_table,
@@ -145,6 +223,7 @@ def reconstruct_graph(
             parent_table=parent_table,
             parent_column=parent_column,
             cardinality=cardinality,
+            role=role,
             pk_runtime_unique=pk_unique,
             confidence=rel.confidence,
         ))
@@ -156,6 +235,7 @@ def reconstruct_graph(
 
     return GraphResult(
         edges=edges,
+        integrity_errors=integrity_errors,
         warnings=warnings,
         non_unique_pk_tables=non_unique_pk_tables,
     )

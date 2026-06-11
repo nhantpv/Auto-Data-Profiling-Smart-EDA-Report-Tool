@@ -165,6 +165,8 @@ class RelationshipInfo(BaseModel):
     decision_reasons: List[str] = Field(default_factory=list)
     blocked_reasons: List[str] = Field(default_factory=list)
     evidence_metrics: Dict[str, Any] = Field(default_factory=dict)
+    cardinality: Optional[str] = None
+    role: Optional[str] = None
 
 
 class IntegrityError(BaseModel):
@@ -306,6 +308,7 @@ class GraphEdge(BaseModel):
     parent_table: str
     parent_column: str
     cardinality: str = "UNKNOWN"   # "1:1" | "1:N" | "N:N" | "UNKNOWN"
+    role: str = "unknown"
     pk_runtime_unique: bool = True
     confidence: float = 1.0
 
@@ -313,6 +316,7 @@ class GraphEdge(BaseModel):
 class GraphResult(BaseModel):
     """Output của reconstruct_graph()."""
     edges: List[GraphEdge] = Field(default_factory=list)
+    integrity_errors: List[IntegrityError] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     non_unique_pk_tables: List[str] = Field(default_factory=list)
 
@@ -340,6 +344,8 @@ class CorrelationPairPlan(BaseModel):
     parent_column: str
     child_table: str
     child_column: str
+    parent_value_column: Optional[str] = None
+    child_value_column: Optional[str] = None
     aggregate_method: str     # mean|sum|count|min|max|median
     reasoning: str = ""
     confidence: str = "medium"  # high|medium|low

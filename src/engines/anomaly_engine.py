@@ -4,11 +4,13 @@ import pandas as pd
 from pyod.models.iforest import IForest
 from pyod.models.ecod import ECOD
 from pyod.models.lof import LOF
+from config.threshold_registry import ThresholdRegistry
 
 logger = logging.getLogger(__name__)
 
 _CONTAMINATION = 0.05
-_DEFAULT_Z_GATE = 3.0  # ensemble z-gate; comfortable margin on both fixtures (verified)
+_THRESHOLDS = ThresholdRegistry()
+_DEFAULT_Z_GATE = _THRESHOLDS.get("outlier_z_score")
 
 
 def _zscore(scores: np.ndarray) -> np.ndarray:

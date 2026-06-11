@@ -161,50 +161,53 @@ def _render_cluster_markdown(cluster: IssueCluster) -> str:
 
 async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
     fallback_markdown = _render_cluster_markdown(cluster)
-    used_fallback = False
-    markdown = fallback_markdown
+    llm_enabled = _llm_enabled()
 
-    if _llm_enabled():
+    if llm_enabled:
         prompt = (
             "Write one concise Markdown section for this issue cluster. "
             "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
-        try:
-            markdown = await _call_openai_async(
-                prompt,
-                (
-                    "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
-                    "Do not invent numbers, thresholds, columns, tables, or recommendations."
-                ),
-                "SMART_EDA_L4_ANALYST_MODEL",
-                "gpt-4o-mini",
+        for attempt in range(1, 4):
+            try:
+                markdown = await _call_openai_async(
+                    prompt,
+                    (
+                        "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
+                        "Do not invent numbers, thresholds, columns, tables, or recommendations."
+                    ),
+                    "SMART_EDA_L4_ANALYST_MODEL",
+                    "gpt-4o-mini",
+                )
+            except Exception:
+                continue
+            report = verify_analyst_output(
+                markdown,
+                cluster.json_slice,
+                provider="openai-analyst",
+                used_fallback=False,
             )
-        except Exception:
-            markdown = fallback_markdown
-            used_fallback = True
+            if report.status == "passed":
+                return AnalystOutput(
+                    cluster_type=cluster.issue_type,
+                    markdown=markdown,
+                    guardrail_passed=True,
+                    retry_count=attempt - 1,
+                )
 
     report = verify_analyst_output(
-        markdown,
+        fallback_markdown,
         cluster.json_slice,
-        provider="openai-analyst" if _llm_enabled() else "deterministic-analyst",
-        used_fallback=used_fallback,
+        provider="deterministic-analyst",
+        used_fallback=llm_enabled,
     )
-    if report.status != "passed":
-        markdown = fallback_markdown
-        report = verify_analyst_output(
-            markdown,
-            cluster.json_slice,
-            provider="deterministic-analyst",
-            used_fallback=True,
-        )
-        used_fallback = True
 
     return AnalystOutput(
         cluster_type=cluster.issue_type,
-        markdown=markdown,
+        markdown=fallback_markdown,
         guardrail_passed=report.status == "passed",
-        retry_count=1 if used_fallback else 0,
+        retry_count=3 if llm_enabled else 0,
     )
 
 
@@ -243,10 +246,10 @@ async def _run_editor(
         cross_table_evaluation=_cross_table_summary(cross_table_analysis),
         priority_ranking=", ".join(output.cluster_type for output in analyst_outputs),
     )
-    used_fallback = False
+    llm_enabled = _llm_enabled()
     editor = fallback
 
-    if _llm_enabled():
+    if llm_enabled:
         payload = {
             "verdict": verdict.model_dump(mode="json"),
             "analyst_sections": [output.markdown for output in analyst_outputs],
@@ -257,36 +260,42 @@ async def _run_editor(
             "Use only the provided evidence.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
-        try:
-            text = await _call_openai_async(
-                prompt,
-                (
-                    "You are an EDA Editor agent. Return valid compact JSON only. "
-                    "Do not invent numbers, columns, tables, relationships, or thresholds."
-                ),
-                "SMART_EDA_L4_EDITOR_MODEL",
-                "gpt-4o",
+        for attempt in range(1, 4):
+            try:
+                text = await _call_openai_async(
+                    prompt,
+                    (
+                        "You are an EDA Editor agent. Return valid compact JSON only. "
+                        "Do not invent numbers, columns, tables, relationships, or thresholds."
+                    ),
+                    "SMART_EDA_L4_EDITOR_MODEL",
+                    "gpt-4o",
+                )
+                candidate = EditorOutput.model_validate_json(text)
+            except Exception:
+                continue
+            report = verify_editor_output(
+                candidate.model_dump(mode="json"),
+                [output.markdown for output in analyst_outputs],
+                verdict,
+                provider="openai-editor",
+                used_fallback=False,
             )
-            editor = EditorOutput.model_validate_json(text)
-        except Exception:
-            editor = fallback
-            used_fallback = True
+            if report.status == "passed":
+                candidate.guardrail_passed = True
+                candidate.retry_count = attempt - 1
+                return candidate
 
     report = verify_editor_output(
-        editor.model_dump(mode="json"),
+        fallback.model_dump(mode="json"),
         [output.markdown for output in analyst_outputs],
         verdict,
-        provider="openai-editor" if _llm_enabled() else "deterministic-editor",
-        used_fallback=used_fallback,
+        provider="deterministic-editor",
+        used_fallback=llm_enabled,
     )
-    if report.status != "passed":
-        editor = fallback
-        editor.guardrail_passed = True
-        editor.retry_count = 1
-    else:
-        editor.guardrail_passed = True
-        editor.retry_count = 1 if used_fallback else 0
-    return editor
+    fallback.guardrail_passed = report.status == "passed"
+    fallback.retry_count = 3 if llm_enabled else 0
+    return fallback
 
 
 def _render_appendix_html(dispatch_result) -> str:

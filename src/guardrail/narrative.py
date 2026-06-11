@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel, Field
 
+from config.threshold_registry import ThresholdRegistry
 from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings
 
 
@@ -14,6 +15,7 @@ _CAUSATION_LANGUAGE = re.compile(
     r"\b(causes?|caused by|causing|leads? to|result(?:s|ed)? in|due to)\b",
     re.IGNORECASE,
 )
+_THRESHOLDS = ThresholdRegistry()
 
 
 class GuardrailViolation(BaseModel):
@@ -79,6 +81,53 @@ def _normalize_numeric_token(token: str) -> str:
         return token
 
 
+def _numeric_value(token: str) -> tuple[float, bool] | None:
+    if token.endswith("%"):
+        try:
+            return float(token[:-1]) / 100.0, True
+        except ValueError:
+            return None
+    try:
+        return float(token), False
+    except ValueError:
+        return None
+
+
+def _is_year_passthrough(token: str) -> bool:
+    parsed = _numeric_value(token)
+    if parsed is None or parsed[1]:
+        return False
+    value = parsed[0]
+    return value.is_integer() and 1900 <= int(value) <= 2100
+
+
+def _number_allowed(token: str, allowed_numbers: set[str]) -> bool:
+    if token in allowed_numbers:
+        return True
+    if _is_year_passthrough(token):
+        return True
+    parsed = _numeric_value(token)
+    if parsed is None:
+        return False
+    token_value, token_is_percent = parsed
+    decimal_tol = _THRESHOLDS.get("guardrail_decimal_tolerance")
+    relative_tol = _THRESHOLDS.get("guardrail_relative_tolerance")
+    for allowed in allowed_numbers:
+        allowed_parsed = _numeric_value(allowed)
+        if allowed_parsed is None:
+            continue
+        allowed_value, allowed_is_percent = allowed_parsed
+        if token_is_percent != allowed_is_percent:
+            continue
+        if token_is_percent:
+            denominator = max(abs(allowed_value), 1e-12)
+            if abs(token_value - allowed_value) / denominator <= relative_tol:
+                return True
+        elif abs(token_value - allowed_value) <= decimal_tol:
+            return True
+    return False
+
+
 def _collect_evidence_values(value: Any, numbers: set[str], references: set[str]) -> None:
     """Collect primitive values from JSON-like evidence for agent-level checks."""
     if value is None:
@@ -120,12 +169,12 @@ def _report_for_text(
     checked_numbers = [_normalize_numeric_token(token) for token in _NUMERIC_TOKEN.findall(text)]
     checked_references = [
         token for token in _BACKTICK_TOKEN.findall(text)
-        if _normalize_numeric_token(token) not in numbers
+        if _numeric_value(token) is None
     ]
 
     violations: list[GuardrailViolation] = []
     for token in checked_numbers:
-        if token not in numbers:
+        if not _number_allowed(token, numbers):
             violations.append(GuardrailViolation(
                 check="number_allowed_set",
                 value=token,
@@ -313,43 +362,10 @@ def validate_narrative(
     used_fallback: bool = False,
 ) -> GuardrailReport:
     evidence = build_narrative_evidence(findings, verdict, schema)
-    checked_numbers = [_normalize_numeric_token(token) for token in _NUMERIC_TOKEN.findall(text)]
-    checked_references = [
-        token for token in _BACKTICK_TOKEN.findall(text)
-        if _normalize_numeric_token(token) not in evidence.numbers
-    ]
-
-    violations: list[GuardrailViolation] = []
-    for token in checked_numbers:
-        if token not in evidence.numbers:
-            violations.append(GuardrailViolation(
-                check="number_allowed_set",
-                value=token,
-                detail="Number is not present in the deterministic findings/verdict evidence set.",
-            ))
-
-    for reference in checked_references:
-        if reference not in evidence.references:
-            violations.append(GuardrailViolation(
-                check="reference_allowed_set",
-                value=reference,
-                detail="Backticked field/table/issue reference is not present in the evidence set.",
-            ))
-
-    for match in _CAUSATION_LANGUAGE.finditer(text):
-        violations.append(GuardrailViolation(
-            check="causation_language_ban",
-            value=match.group(0),
-            detail="Narrative must not turn correlation or association into causal language.",
-        ))
-
-    return GuardrailReport(
-        status="passed" if not violations else "failed",
-        provider=provider,
-        used_fallback=used_fallback,
-        checked_numbers=checked_numbers,
-        checked_references=checked_references,
-        violations=violations,
-        allowed_numbers_count=len(evidence.numbers),
-        allowed_references_count=len(evidence.references),
+    return _report_for_text(
+        text,
+        evidence.numbers,
+        evidence.references,
+        provider,
+        used_fallback,
     )

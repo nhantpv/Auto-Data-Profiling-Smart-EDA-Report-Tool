@@ -8,10 +8,12 @@ QĐ-6a: "MNAR?" retired.  Only MAR escalates missingness severity.
 """
 import json
 from pathlib import Path
+from config.threshold_registry import ThresholdRegistry
 from ontology.models import AnomalyRecord, ColumnStats, Provenance, Severity, SEVERITY_ORDER
 from ontology.finding_registry import FindingRegistry
 
 _TABLE_PATH = Path(__file__).parent.parent.parent / "config" / "calibrator_table.json"
+_THRESHOLDS = ThresholdRegistry()
 
 
 def load_calibrator_table() -> dict:
@@ -90,7 +92,7 @@ def calibrate_columns(
         if stats.type == "Categorical":
             # High cardinality: p_distinct = n_distinct / n
             p_distinct = n_distinct / n if n > 0 else 0.0
-            if p_distinct > 0.9:
+            if p_distinct > _THRESHOLDS.get("high_cardinality_gate"):
                 registry.register_anomaly(AnomalyRecord(
                     issue_type="HIGH_CARDINALITY",
                     description=f"Column '{col_name}' has high cardinality (p_distinct={p_distinct:.2f})",
@@ -106,7 +108,7 @@ def calibrate_columns(
 
             # Severe imbalance
             imbalance = stats.additional_metrics.get("imbalance")
-            if imbalance is not None and imbalance > 0.95:
+            if imbalance is not None and imbalance > _THRESHOLDS.get("imbalance_gate"):
                 registry.register_anomaly(AnomalyRecord(
                     issue_type="IMBALANCE",
                     description=f"Column '{col_name}' is severely imbalanced (imbalance={imbalance:.3f})",

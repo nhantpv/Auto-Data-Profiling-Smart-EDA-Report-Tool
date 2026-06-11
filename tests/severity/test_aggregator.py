@@ -55,6 +55,15 @@ class TestAggregateVerdict:
         v = aggregate(_meta(), [_rec("HIGH", compound_severity=None)])
         assert v.verdict == Verdict.WARN
 
+    def test_warn_density_uses_affected_column_share(self):
+        v = aggregate(_meta(), [
+            _rec("WARN", col="a"),
+            _rec("WARN", col="b"),
+        ])
+
+        assert v.verdict == Verdict.WARN
+        assert "of columns" in v.verdict_rationale
+
 
 class TestAggregateVerdictSummary:
     def test_counts_by_tier(self):

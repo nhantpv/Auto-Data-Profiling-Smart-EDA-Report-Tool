@@ -152,6 +152,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "data_quality_findings": _read_json(output_dir / "data_quality_findings.json"),
         "schema_evaluation_findings": _read_json(output_dir / "schema_evaluation_findings.json"),
         "schema_gate": _read_json(output_dir / "schema_gate.json"),
+        "relationship_graph": _read_json(output_dir / "relationship_graph.json"),
         "cross_table_analysis": _read_json(output_dir / "cross_table_analysis.json"),
         "guardrail_report": _read_json(output_dir / "guardrail_report.json"),
         "artifact_manifest": _read_json(output_dir / "artifact_manifest.json"),

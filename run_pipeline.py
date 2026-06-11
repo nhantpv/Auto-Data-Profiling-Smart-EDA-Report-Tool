@@ -19,7 +19,7 @@ from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from engines.cross_table_engine import run_cross_table_analysis
-from engines.graph_engine import reconstruct_graph
+from engines.graph_engine import accepted_relationships_from_graph, reconstruct_graph
 from engines.schema_gate import apply_schema_gate
 from engines.schema_engine import (
     build_schema_findings, load_tables, load_tables_by_path, validate_schema_multi,
@@ -369,7 +369,7 @@ def run_multi(
             str(path),
             out,
             artifact_prefix=table_name,
-            profiling_minimal=True,
+            profiling_minimal=False,
         )
         table_findings[table_name] = findings
 
@@ -398,15 +398,31 @@ def run_multi(
     )
     combined_findings = _combine_multi_findings(table_findings, meta)
 
-    verdict = aggregate(meta, dq_findings=combined_findings.anomalies, integrity_errors=schema.integrity_errors)
-
     cross_tables = _load_tables_for_cross_analysis(data_paths, schema_path)
     schema_gate = apply_schema_gate(schema, cross_tables, confirmed_schema_path, fact_table)
     gated_schema = schema.model_copy(update={"relationships": schema_gate.relationships})
     graph_result = reconstruct_graph(cross_tables, gated_schema)
+    graph_relationships = accepted_relationships_from_graph(schema_gate.relationships, graph_result)
+    schema_meta_for_output = schema.schema_meta.model_copy(update={
+        "total_relationships": len(graph_relationships),
+    })
+    schema_for_output = schema.model_copy(update={
+        "schema_meta": schema_meta_for_output,
+        "relationships": graph_relationships,
+        "integrity_errors": [*schema.integrity_errors, *graph_result.integrity_errors],
+    })
+    schema_gate_for_output = schema_gate.model_copy(update={
+        "relationships": graph_relationships,
+        "warnings": [*schema_gate.warnings, *graph_result.warnings],
+    })
+    verdict = aggregate(
+        meta,
+        dq_findings=combined_findings.anomalies,
+        integrity_errors=schema_for_output.integrity_errors,
+    )
     cross_table_analysis = run_cross_table_analysis(
         cross_tables,
-        schema_gate.relationships,
+        graph_relationships,
         out,
         fact_table=schema_gate.fact_table,
     )
@@ -424,7 +440,7 @@ def run_multi(
     l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(
         combined_findings,
         verdict,
-        schema,
+        schema_for_output,
         cross_table_analysis,
     )
     smart_html = merge_to_tabbed_html(
@@ -442,12 +458,12 @@ def run_multi(
         ),
         encoding="utf-8",
     )
-    schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
-    schema_gate_path.write_text(schema_gate.model_dump_json(indent=2), encoding="utf-8")
+    schema_out.write_text(schema_for_output.model_dump_json(indent=2), encoding="utf-8")
+    schema_gate_path.write_text(schema_gate_for_output.model_dump_json(indent=2), encoding="utf-8")
     graph_path.write_text(graph_result.model_dump_json(indent=2), encoding="utf-8")
     cross_table_path.write_text(cross_table_analysis.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
-    report_path.write_text(render_markdown_report(combined_findings, verdict, schema), encoding="utf-8")
+    report_path.write_text(render_markdown_report(combined_findings, verdict, schema_for_output), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
     guardrail_path.write_text(guardrail_report.model_dump_json(indent=2), encoding="utf-8")
     html_report_path.write_text(smart_html, encoding="utf-8")

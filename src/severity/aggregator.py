@@ -2,6 +2,10 @@ from ontology.models import (
     AnomalyRecord, DatasetMeta, DatasetVerdict, IntegrityError, IssueDetailRef,
     IssueSummary, Severity, SEVERITY_ORDER, Verdict, VerdictSummary,
 )
+from config.threshold_registry import ThresholdRegistry
+
+
+_THRESHOLDS = ThresholdRegistry()
 
 
 def _effective(f: AnomalyRecord | IntegrityError) -> Severity:
@@ -137,12 +141,15 @@ def aggregate(
             for f in warn_plus
             if getattr(f, "affected_column", None)
         ))
-        share = len(warn_plus) / summary.total_issues if summary.total_issues else 0
-        if share > 0.20 and n_cols_affected >= 2:
+        share = n_cols_affected / max(meta.n_var, 1)
+        if (
+            share > _THRESHOLDS.get("density_share_gate")
+            and n_cols_affected >= int(_THRESHOLDS.get("density_min_cols"))
+        ):
             verdict = Verdict.WARN
             rationale = (
                 f"Density rule: {len(warn_plus)} WARN+ issues across "
-                f"{n_cols_affected} columns ({share:.0%} of findings) — review before use"
+                f"{n_cols_affected} columns ({share:.0%} of columns) — review before use"
             )
 
     return DatasetVerdict(

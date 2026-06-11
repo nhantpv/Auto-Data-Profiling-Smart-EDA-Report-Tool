@@ -94,12 +94,17 @@ class ThresholdRegistry:
         """Register thresholds that were previously hardcoded in various modules."""
         defaults = [
             ("mar_auc_gate", 0.65, "Logistic AUC above which column is labelled MAR"),
+            ("mcar_alpha", 0.05, "Diagnostic Little's-test alpha; does not drive missingness labels"),
             ("outlier_z_score", 3.0, "Z-score threshold for outlier detection"),
             ("null_overlap_gate", 0.70, "Null overlap threshold for cross-table joins"),
+            ("numeric_parse_rate_gate", 0.80, "Minimum parseable numeric share for text columns in numeric analysis"),
+            ("cross_table_min_n", 30.0, "Minimum paired observations for cross-table correlation"),
             ("imbalance_gate", 0.95, "Imbalance ratio above which column is flagged"),
             ("high_cardinality_gate", 0.90, "p_distinct above which categorical is flagged"),
             ("density_share_gate", 0.20, "M1: share of WARN+ findings for density rule"),
             ("density_min_cols", 2.0, "M1: minimum columns affected for density rule"),
+            ("guardrail_decimal_tolerance", 0.0001, "Allowed absolute decimal tolerance for L4 number checks"),
+            ("guardrail_relative_tolerance", 0.001, "Allowed relative tolerance for L4 percentage checks"),
         ]
         for key, value, desc in defaults:
             if key not in self._entries:
