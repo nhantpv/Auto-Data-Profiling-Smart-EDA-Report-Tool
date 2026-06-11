@@ -125,6 +125,26 @@ def aggregate(
         verdict = Verdict.READY
         rationale = "No blocking issues — data READY" if summary.total_issues > 0 else "No issues found — data READY"
 
+    # ── M1 density rule (ARCHITECT v5.4 §5.6) ──────────────────────────────
+    # Many small WARNs spread across columns → escalate to at least WARN.
+    if verdict == Verdict.READY and summary.total_issues > 0:
+        warn_plus = [
+            f for f in all_findings
+            if _severity_rank(_effective(f)) >= _severity_rank(Severity.WARN)
+        ]
+        n_cols_affected = len(set(
+            getattr(f, "affected_column", None)
+            for f in warn_plus
+            if getattr(f, "affected_column", None)
+        ))
+        share = len(warn_plus) / summary.total_issues if summary.total_issues else 0
+        if share > 0.20 and n_cols_affected >= 2:
+            verdict = Verdict.WARN
+            rationale = (
+                f"Density rule: {len(warn_plus)} WARN+ issues across "
+                f"{n_cols_affected} columns ({share:.0%} of findings) — review before use"
+            )
+
     return DatasetVerdict(
         dataset_meta=meta,
         verdict=verdict,

@@ -1,8 +1,12 @@
-"""Missingness mechanism classification: MCAR / MAR / MNAR? (heuristic).
+"""Missingness mechanism classification: MCAR_CONSISTENT / MAR (per-column).
 
 Thresholds are tunable constants — do not hardcode downstream.
-MNAR? is tentative only: MNAR cannot be confirmed from observed data alone.
-Little's test is an indicator, not a verdict (pyampute docs caveat).
+QĐ-6a (ARCHITECT v5.4 §Mục 10): "MNAR?" is retired — cannot confirm from
+observed data alone.  Only MCAR_CONSISTENT, MAR, and INDETERMINATE are
+emitted.
+
+Per-column (H5 fix): each target column gets its own AUC score against all
+other numeric columns, yielding an independent mechanism label.
 """
 import logging
 import numpy as np
@@ -12,35 +16,12 @@ from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger(__name__)
 
-_MAR_AUC_GATE = 0.65   # logistic CV-AUC above which we label a column MAR
-_MCAR_ALPHA   = 0.05   # significance level for Little's MCAR test
+_MAR_AUC_GATE = 0.70   # AUC above which we label a column MAR (ARCHITECT v5.4)
 _MAX_MISSINGNESS_ROWS = 10_000
 _SAMPLE_RANDOM_STATE = 42
 
 
-# ── Little's MCAR test ────────────────────────────────────────────────────────
-
-def little_mcar_pvalue(df_numeric: pd.DataFrame) -> float | None:
-    """Run Little's MCAR test on a numeric DataFrame.
-
-    Returns p-value (float) or None if test cannot be run (errors, <2 columns,
-    collinear covariance, no missing values that form usable patterns).
-    """
-    numeric = df_numeric.select_dtypes(include="number")
-    if numeric.shape[1] < 2:
-        return None
-    if numeric.isna().sum().sum() == 0:
-        return None
-    try:
-        from pyampute.exploration.mcar_statistical_tests import MCARTest
-        p = MCARTest(method="little").little_mcar_test(numeric)
-        return float(p)
-    except Exception as exc:
-        logger.debug("Little's MCAR test failed: %s", exc)
-        return None
-
-
-# ── MAR heuristic (logistic CV-AUC) ─────────────────────────────────────────
+# ── MAR heuristic (logistic CV-AUC, per-column) ─────────────────────────────
 
 def mar_auc(df: pd.DataFrame, col: str) -> float | None:
     """Predict is_missing(col) from other numeric columns via logistic regression CV.
@@ -52,12 +33,12 @@ def mar_auc(df: pd.DataFrame, col: str) -> float | None:
     - any other error
     """
     series = df[col]
-    n_missing = int(series.isna().sum())
+    n_missing = series.isna().sum()
     if n_missing < 10:
         return None
 
-    y = series.isna().astype(int).values
-    if len(np.unique(y)) < 2:
+    y = series.isna().astype(int).to_numpy()
+    if y.min() == y.max():
         return None
 
     # Predictors: numeric columns OTHER than col, filled with median
@@ -69,40 +50,36 @@ def mar_auc(df: pd.DataFrame, col: str) -> float | None:
     try:
         clf = LogisticRegression(max_iter=200, random_state=42)
         scores = cross_val_score(clf, X, y, cv=3, scoring="roc_auc")
-        return float(np.mean(scores))
+        return float(scores.mean())
     except Exception as exc:
         logger.debug("mar_auc failed for column '%s': %s", col, exc)
         return None
 
 
-# ── Classification logic ──────────────────────────────────────────────────────
+# ── Per-column classification (H5 fix) ───────────────────────────────────────
 
-def classify_missingness(
+def classify_missingness_per_column(
     col_missing: int,
-    mcar_p: float | None,
     auc: float | None,
 ) -> str | None:
-    """Map (col_missing, mcar_p, auc) → mechanism label.
+    """Map (col_missing, auc) → mechanism label (per-column, no MNAR).
 
-    Priority:
-    1. 0 missing → None
-    2. auc > _MAR_AUC_GATE → "MAR"
-    3. mcar_p >= _MCAR_ALPHA → "MCAR"
-    4. mcar_p < _MCAR_ALPHA → "MNAR?"  (tentative — cannot confirm from data)
-    5. else → None
+    Rules (ARCHITECT v5.4 §5.4 L2.5, QĐ-6a):
+        1. 0 missing → None
+        2. auc > _MAR_AUC_GATE → "MAR"
+        3. auc is computable and ≤ gate → "MCAR_CONSISTENT"
+        4. auc not computable (< 10 missing, no numeric predictors) → "INDETERMINATE"
     """
     if col_missing == 0:
         return None
     if auc is not None and auc > _MAR_AUC_GATE:
         return "MAR"
-    if mcar_p is not None and mcar_p >= _MCAR_ALPHA:
-        return "MCAR"
-    if mcar_p is not None and mcar_p < _MCAR_ALPHA:
-        return "MNAR?"
-    return None
+    if auc is not None:
+        return "MCAR_CONSISTENT"
+    return "INDETERMINATE"
 
 
-# ── Dataset-level entry point ─────────────────────────────────────────────────
+# ── Sampling helper ──────────────────────────────────────────────────────────
 
 def sample_missingness_frame(
     df: pd.DataFrame,
@@ -111,9 +88,9 @@ def sample_missingness_frame(
 ) -> pd.DataFrame:
     """Cap missingness diagnostics to max_rows while preserving missing rows.
 
-    Large datasets can make Little's MCAR test and logistic CV expensive. We keep
-    all rows with any missing value when they fit the cap, then fill the
-    remaining budget with a deterministic sample of complete rows.
+    Large datasets can make logistic CV expensive.  We keep all rows with any
+    missing value when they fit the cap, then fill the remaining budget with a
+    deterministic sample of complete rows.
     """
     if len(df) <= max_rows:
         return df
@@ -129,10 +106,16 @@ def sample_missingness_frame(
     return pd.concat([missing_rows, sampled_complete]).sort_index()
 
 
-def detect_missingness(df: pd.DataFrame, max_rows: int = _MAX_MISSINGNESS_ROWS) -> dict:
-    """Run one Little's test (dataset-level) then per-column MAR AUC.
+# ── Dataset-level entry point ─────────────────────────────────────────────────
 
-    Returns {col_name: mechanism} only for columns that have missing values.
+def detect_missingness(df: pd.DataFrame, max_rows: int = _MAX_MISSINGNESS_ROWS) -> dict[str, str | None]:
+    """Per-column missingness classification via AUC (H5 fix).
+
+    Each column with missing values gets an independent logistic-regression AUC
+    against all other numeric columns.  The AUC determines whether missingness
+    is MAR (predictable from other columns) or MCAR_CONSISTENT (random).
+
+    Returns ``{col_name: mechanism}`` only for columns that have missing values.
     Columns with no missing are omitted from the result.
     """
     missing_cols = [c for c in df.columns if df[c].isna().any()]
@@ -140,13 +123,11 @@ def detect_missingness(df: pd.DataFrame, max_rows: int = _MAX_MISSINGNESS_ROWS) 
         return {}
 
     sampled_df = sample_missingness_frame(df, max_rows=max_rows)
-    numeric_df = sampled_df.select_dtypes(include="number")
-    mcar_p = little_mcar_pvalue(numeric_df)
 
-    result = {}
+    result: dict[str, str | None] = {}
     for col in missing_cols:
-        n_missing = int(sampled_df[col].isna().sum()) if col in sampled_df.columns else 0
-        auc = mar_auc(sampled_df, col) if col in numeric_df.columns else None
-        mech = classify_missingness(n_missing, mcar_p, auc)
+        n_missing = sampled_df[col].isna().sum() if col in sampled_df.columns else 0
+        auc = mar_auc(sampled_df, col) if col in sampled_df.columns else None
+        mech = classify_missingness_per_column(n_missing, auc)
         result[col] = mech
     return result

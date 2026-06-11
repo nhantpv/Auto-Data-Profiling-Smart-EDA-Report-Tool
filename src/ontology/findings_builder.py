@@ -1,15 +1,33 @@
+"""Build DataQualityFindings from profiling + anomaly detection results.
+
+Integrates FindingRegistry for dedup/ID assignment and ThresholdRegistry
+for config-driven threshold references (ARCHITECT v5.4 §L3).
+"""
 import logging
 import numpy as np
 import pandas as pd
 from typing import Dict, Any
 from pathlib import Path
 from ontology.models import (
-    DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Severity,
+    DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Provenance, Severity,
 )
+from ontology.finding_registry import FindingRegistry
+from config.threshold_registry import ThresholdRegistry
 from severity.missingness import detect_missingness
 from severity.calibrator import load_calibrator_table
 
 logger = logging.getLogger(__name__)
+
+# Module-level singletons (lazy-init)
+_threshold_registry: ThresholdRegistry | None = None
+
+
+def _get_threshold_registry() -> ThresholdRegistry:
+    """Lazy singleton for ThresholdRegistry."""
+    global _threshold_registry
+    if _threshold_registry is None:
+        _threshold_registry = ThresholdRegistry()
+    return _threshold_registry
 
 
 def _safe_artifact_stem(name: str) -> str:
@@ -83,7 +101,7 @@ def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | Non
         n_missing = col_data.get("n_missing", 0)
         p_missing = col_data.get("p_missing", 0.0)
         n_distinct = col_data.get("n_distinct", None)
-        n_zeros = col_data.get("n_zeros", None)  # PATCH 2: numeric only; categorical = None
+        n_zeros = col_data.get("n_zeros", None)
 
         extra = {}
         if simple_type == "Numeric":
@@ -99,7 +117,7 @@ def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | Non
             type=simple_type,
             n_missing=int(n_missing),
             p_missing=float(p_missing),
-            n_zeros=int(n_zeros) if n_zeros is not None else None,  # PATCH 2
+            n_zeros=int(n_zeros) if n_zeros is not None else None,
             n_distinct=int(n_distinct) if n_distinct is not None else None,
             missingness_mechanism=(mechs or {}).get(col_name),
             additional_metrics=extra,
@@ -116,6 +134,14 @@ def build_data_quality_findings(
     artifact_dir: str | Path | None = None,
     artifact_prefix: str | None = None,
 ) -> DataQualityFindings:
+    """Build DataQualityFindings with FindingRegistry integration.
+
+    All anomalies are registered in a FindingRegistry which:
+    - Assigns deterministic ``finding_id``
+    - Deduplicates by ID (keeps higher severity)
+    - Attaches ``threshold_ref`` for config-driven thresholds
+    - Sets ``provenance`` to OBSERVED (directly measured from data)
+    """
     table = profile_result.get("table", {})
     sampling = df.attrs.get("sampling", {})
 
@@ -139,8 +165,10 @@ def build_data_quality_findings(
     columns = _extract_column_stats(profile_result.get("variables", {}), mechs=mechs)
 
     cal_table = load_calibrator_table()
+    registry = FindingRegistry()
+    threshold_reg = _get_threshold_registry()
 
-    anomalies = []
+    anomalies: list[AnomalyRecord] = []
     artifact_stem = artifact_prefix or _safe_artifact_stem(file_name)
 
     # Outlier record
@@ -159,18 +187,21 @@ def build_data_quality_findings(
         ratio = n_outliers / meta.n
         outlier_cfg = cal_table.get("outlier_ensemble", {})
         outlier_sev = _threshold_severity(ratio, outlier_cfg.get("thresholds", []))
-        anomalies.append(AnomalyRecord(
+        record = AnomalyRecord(
             issue_type="OUTLIER_ENSEMBLE",
             description=f"Phát hiện {n_outliers} dòng dị biệt ({ratio*100:.1f}% data)",
             severity=outlier_sev,
             dq_dimensions=[outlier_cfg.get("dq_dimension", "Accuracy")],
             ml_impact=["training_bias"] if ratio > 0.05 else [],
             confidence=round(float(np.mean(outlier_scores)), 4) if outlier_scores else None,
+            provenance=Provenance.OBSERVED,
+            threshold_ref="outlier_ensemble",
             affected_count=n_outliers,
             affected_percent=round(ratio, 4),
             top_10_samples=top_samples,
             full_anomalies_export_path=outlier_export,
-        ))
+        )
+        anomalies.append(registry.register_anomaly(record))
 
     # Duplicate record
     if meta.n_duplicates > 0:
@@ -186,17 +217,25 @@ def build_data_quality_findings(
         )
         dup_cfg = cal_table.get("duplicate", {})
         dup_sev = _threshold_severity(meta.p_duplicates, dup_cfg.get("thresholds", []))
-        anomalies.append(AnomalyRecord(
+        record = AnomalyRecord(
             issue_type="DUPLICATE",
             description=f"Phát hiện {meta.n_duplicates} dòng trùng lặp ({meta.p_duplicates*100:.1f}% data)",
             severity=dup_sev,
             dq_dimensions=[dup_cfg.get("dq_dimension", "Uniqueness")],
             ml_impact=["training_bias"] if meta.p_duplicates > 0.05 else [],
+            provenance=Provenance.OBSERVED,
+            threshold_ref="duplicate",
             affected_count=meta.n_duplicates,
             affected_percent=meta.p_duplicates,
             top_10_samples=dup_samples,  # type: ignore[arg-type]
             full_anomalies_export_path=duplicate_export,
-        ))
+        )
+        anomalies.append(registry.register_anomaly(record))
+
+    logger.info(
+        "build_data_quality_findings: %d anomalies registered in FindingRegistry",
+        registry.count(),
+    )
 
     return DataQualityFindings(
         dataset_meta=meta,
