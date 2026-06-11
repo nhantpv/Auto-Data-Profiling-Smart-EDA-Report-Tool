@@ -31,6 +31,7 @@ class GuardrailReport(BaseModel):
     violations: list[GuardrailViolation] = Field(default_factory=list)
     allowed_numbers_count: int = 0
     allowed_references_count: int = 0
+    agents: list[dict] = Field(default_factory=list)
 
 
 class NarrativeEvidence(BaseModel):
@@ -79,6 +80,59 @@ def _normalize_numeric_token(token: str) -> str:
         return token
 
 
+# Tolerance spec (ARCHITECT v5.4 §Mục 10): integer = exact, decimal = ±0.0001,
+# relative (percent) = ±0.1%, year 1900–2100 = pass-through.
+_DECIMAL_TOLERANCE = 0.0001
+_RELATIVE_TOLERANCE = 0.001
+_YEAR_RANGE = (1900, 2100)
+_FLOAT_EPSILON = 1e-9
+
+
+def _number_token_allowed(raw_token: str, numbers: set[str]) -> bool:
+    """Check one numeric token against the evidence allowed set.
+
+    Exact comparison uses the normalized form; the tolerance comparison uses
+    the raw token so rounding does not eat the spec'd margins.
+    """
+    if _normalize_numeric_token(raw_token) in numbers:
+        return True
+
+    if raw_token.endswith("%"):
+        try:
+            value = float(raw_token[:-1])
+        except ValueError:
+            return False
+        for allowed in numbers:
+            if not allowed.endswith("%"):
+                continue
+            try:
+                reference = float(allowed[:-1])
+            except ValueError:
+                continue
+            if reference == 0.0:
+                continue
+            if abs(value - reference) / abs(reference) <= _RELATIVE_TOLERANCE + _FLOAT_EPSILON:
+                return True
+        return False
+
+    try:
+        value = float(raw_token)
+    except ValueError:
+        return False
+    if value.is_integer():
+        return _YEAR_RANGE[0] <= int(value) <= _YEAR_RANGE[1]
+    for allowed in numbers:
+        if allowed.endswith("%"):
+            continue
+        try:
+            reference = float(allowed)
+        except ValueError:
+            continue
+        if not reference.is_integer() and abs(value - reference) <= _DECIMAL_TOLERANCE + _FLOAT_EPSILON:
+            return True
+    return False
+
+
 def _collect_evidence_values(value: Any, numbers: set[str], references: set[str]) -> None:
     """Collect primitive values from JSON-like evidence for agent-level checks."""
     if value is None:
@@ -117,15 +171,16 @@ def _report_for_text(
     provider: str,
     used_fallback: bool = False,
 ) -> GuardrailReport:
-    checked_numbers = [_normalize_numeric_token(token) for token in _NUMERIC_TOKEN.findall(text)]
+    raw_numbers = _NUMERIC_TOKEN.findall(text)
+    checked_numbers = [_normalize_numeric_token(token) for token in raw_numbers]
     checked_references = [
         token for token in _BACKTICK_TOKEN.findall(text)
         if _normalize_numeric_token(token) not in numbers
     ]
 
     violations: list[GuardrailViolation] = []
-    for token in checked_numbers:
-        if token not in numbers:
+    for raw_token, token in zip(raw_numbers, checked_numbers):
+        if not _number_token_allowed(raw_token, numbers):
             violations.append(GuardrailViolation(
                 check="number_allowed_set",
                 value=token,
@@ -313,15 +368,16 @@ def validate_narrative(
     used_fallback: bool = False,
 ) -> GuardrailReport:
     evidence = build_narrative_evidence(findings, verdict, schema)
-    checked_numbers = [_normalize_numeric_token(token) for token in _NUMERIC_TOKEN.findall(text)]
+    raw_numbers = _NUMERIC_TOKEN.findall(text)
+    checked_numbers = [_normalize_numeric_token(token) for token in raw_numbers]
     checked_references = [
         token for token in _BACKTICK_TOKEN.findall(text)
         if _normalize_numeric_token(token) not in evidence.numbers
     ]
 
     violations: list[GuardrailViolation] = []
-    for token in checked_numbers:
-        if token not in evidence.numbers:
+    for raw_token, token in zip(raw_numbers, checked_numbers):
+        if not _number_token_allowed(raw_token, evidence.numbers):
             violations.append(GuardrailViolation(
                 check="number_allowed_set",
                 value=token,

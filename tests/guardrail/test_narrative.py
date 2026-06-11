@@ -5,7 +5,7 @@ from ontology.models import (
     Verdict,
     VerdictSummary,
 )
-from guardrail import validate_narrative
+from guardrail import validate_narrative, verify_analyst_output
 from reporting.l4_report import generate_l4_report
 
 
@@ -55,6 +55,37 @@ def test_guardrail_rejects_causal_language():
 
     assert report.status == "failed"
     assert any(v.check == "causation_language_ban" for v in report.violations)
+
+
+def test_guardrail_year_token_passes_without_evidence():
+    report = validate_narrative("Collected during 2024.", _findings(), _verdict())
+
+    assert report.status == "passed"
+
+
+def test_guardrail_decimal_within_tolerance_passes():
+    report = verify_analyst_output("Score is 0.1668 here.", {"score": 0.1667})
+
+    assert report.status == "passed"
+
+
+def test_guardrail_decimal_outside_tolerance_fails():
+    report = verify_analyst_output("Score is 0.1670 here.", {"score": 0.1667})
+
+    assert report.status == "failed"
+    assert report.violations[0].check == "number_allowed_set"
+
+
+def test_guardrail_percent_within_relative_tolerance_passes():
+    report = verify_analyst_output("Missing rate is 90.08% overall.", {"rate": "90.0%"})
+
+    assert report.status == "passed"
+
+
+def test_guardrail_percent_outside_relative_tolerance_fails():
+    report = verify_analyst_output("Missing rate is 91.0% overall.", {"rate": "90.0%"})
+
+    assert report.status == "failed"
 
 
 def test_generated_l4_report_passes_guardrail(monkeypatch):
