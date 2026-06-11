@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import urllib.error
@@ -18,12 +19,21 @@ from ontology.models import (
     CrossTableAnalysis,
     DataQualityFindings,
     DatasetVerdict,
+    DispatchResult,
     EditorOutput,
     IssueCluster,
     MultiAgentResult,
     SchemaEvaluationFindings,
+    Severity,
+    SEVERITY_ORDER,
 )
 from reporting.dispatcher import dispatch
+
+_MAX_AGENT_RETRIES = 3  # ARCHITECT §5.9(f): per-agent guardrail retry ≤ 3
+
+
+def _severity_rank(severity: Severity) -> int:
+    return SEVERITY_ORDER.index(severity)
 
 
 def _pct(value: float) -> str:
@@ -159,10 +169,27 @@ def _render_cluster_markdown(cluster: IssueCluster) -> str:
     return "\n".join(lines)
 
 
-async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
+def _agent_detail(
+    agent: str,
+    report: GuardrailReport,
+    retry_count: int,
+    cluster: str | None = None,
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "agent": agent,
+        "status": report.status,
+        "provider": report.provider,
+        "used_fallback": report.used_fallback,
+        "retry_count": retry_count,
+        "violations": [violation.model_dump(mode="json") for violation in report.violations],
+    }
+    if cluster is not None:
+        detail["cluster"] = cluster
+    return detail
+
+
+async def _run_analyst(cluster: IssueCluster) -> tuple[AnalystOutput, dict[str, Any]]:
     fallback_markdown = _render_cluster_markdown(cluster)
-    used_fallback = False
-    markdown = fallback_markdown
 
     if _llm_enabled():
         prompt = (
@@ -170,42 +197,63 @@ async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
             "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
-        try:
-            markdown = await _call_openai_async(
-                prompt,
-                (
-                    "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
-                    "Do not invent numbers, thresholds, columns, tables, or recommendations."
-                ),
-                "SMART_EDA_L4_ANALYST_MODEL",
-                "gpt-4o-mini",
+        retries = 0
+        for _attempt in range(_MAX_AGENT_RETRIES):
+            try:
+                markdown = await _call_openai_async(
+                    prompt,
+                    (
+                        "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
+                        "Do not invent numbers, thresholds, columns, tables, or recommendations."
+                    ),
+                    "SMART_EDA_L4_ANALYST_MODEL",
+                    "gpt-4o-mini",
+                )
+            except Exception:
+                retries += 1
+                continue
+            report = verify_analyst_output(
+                markdown,
+                cluster.json_slice,
+                provider="openai-analyst",
             )
-        except Exception:
-            markdown = fallback_markdown
-            used_fallback = True
+            if report.status == "passed":
+                output = AnalystOutput(
+                    cluster_type=cluster.issue_type,
+                    markdown=markdown,
+                    guardrail_passed=True,
+                    retry_count=retries,
+                )
+                return output, _agent_detail("analyst", report, retries, cluster.issue_type)
+            retries += 1
 
-    report = verify_analyst_output(
-        markdown,
-        cluster.json_slice,
-        provider="openai-analyst" if _llm_enabled() else "deterministic-analyst",
-        used_fallback=used_fallback,
-    )
-    if report.status != "passed":
-        markdown = fallback_markdown
+        # All retries exhausted → deterministic section (graceful degradation).
         report = verify_analyst_output(
-            markdown,
+            fallback_markdown,
             cluster.json_slice,
             provider="deterministic-analyst",
             used_fallback=True,
         )
-        used_fallback = True
+        output = AnalystOutput(
+            cluster_type=cluster.issue_type,
+            markdown=fallback_markdown,
+            guardrail_passed=report.status == "passed",
+            retry_count=retries,
+        )
+        return output, _agent_detail("analyst", report, retries, cluster.issue_type)
 
-    return AnalystOutput(
-        cluster_type=cluster.issue_type,
-        markdown=markdown,
-        guardrail_passed=report.status == "passed",
-        retry_count=1 if used_fallback else 0,
+    report = verify_analyst_output(
+        fallback_markdown,
+        cluster.json_slice,
+        provider="deterministic-analyst",
     )
+    output = AnalystOutput(
+        cluster_type=cluster.issue_type,
+        markdown=fallback_markdown,
+        guardrail_passed=report.status == "passed",
+        retry_count=0,
+    )
+    return output, _agent_detail("analyst", report, 0, cluster.issue_type)
 
 
 def _cross_table_summary(cross_table_analysis: CrossTableAnalysis | None) -> str | None:
@@ -228,11 +276,21 @@ def _cross_table_summary(cross_table_analysis: CrossTableAnalysis | None) -> str
     return f"Cross-table analysis used fact table {cross_table_analysis.fact_table}."
 
 
+def _strip_json_fences(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        first_break = stripped.find("\n")
+        stripped = stripped[first_break + 1:] if first_break != -1 else ""
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3]
+    return stripped.strip()
+
+
 async def _run_editor(
     verdict: DatasetVerdict,
     analyst_outputs: list[AnalystOutput],
     cross_table_analysis: CrossTableAnalysis | None,
-) -> EditorOutput:
+) -> tuple[EditorOutput, dict[str, Any]]:
     meta = verdict.dataset_meta
     fallback = EditorOutput(
         executive_summary=(
@@ -243,13 +301,12 @@ async def _run_editor(
         cross_table_evaluation=_cross_table_summary(cross_table_analysis),
         priority_ranking=", ".join(output.cluster_type for output in analyst_outputs),
     )
-    used_fallback = False
-    editor = fallback
+    analyst_markdowns = [output.markdown for output in analyst_outputs]
 
     if _llm_enabled():
         payload = {
             "verdict": verdict.model_dump(mode="json"),
-            "analyst_sections": [output.markdown for output in analyst_outputs],
+            "analyst_sections": analyst_markdowns,
             "cross_table_analysis": cross_table_analysis.model_dump(mode="json") if cross_table_analysis else None,
         }
         prompt = (
@@ -257,45 +314,107 @@ async def _run_editor(
             "Use only the provided evidence.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
-        try:
-            text = await _call_openai_async(
-                prompt,
-                (
-                    "You are an EDA Editor agent. Return valid compact JSON only. "
-                    "Do not invent numbers, columns, tables, relationships, or thresholds."
-                ),
-                "SMART_EDA_L4_EDITOR_MODEL",
-                "gpt-4o",
+        retries = 0
+        for _attempt in range(_MAX_AGENT_RETRIES):
+            try:
+                text = await _call_openai_async(
+                    prompt,
+                    (
+                        "You are an EDA Editor agent. Return valid compact JSON only. "
+                        "Do not invent numbers, columns, tables, relationships, or thresholds."
+                    ),
+                    "SMART_EDA_L4_EDITOR_MODEL",
+                    "gpt-4o",
+                )
+                editor = EditorOutput.model_validate_json(_strip_json_fences(text))
+            except Exception:
+                retries += 1
+                continue
+            report = verify_editor_output(
+                editor.model_dump(mode="json"),
+                analyst_markdowns,
+                verdict,
+                provider="openai-editor",
             )
-            editor = EditorOutput.model_validate_json(text)
-        except Exception:
-            editor = fallback
-            used_fallback = True
+            if report.status == "passed":
+                editor.guardrail_passed = True
+                editor.retry_count = retries
+                return editor, _agent_detail("editor", report, retries)
+            retries += 1
+
+        report = verify_editor_output(
+            fallback.model_dump(mode="json"),
+            analyst_markdowns,
+            verdict,
+            provider="deterministic-editor",
+            used_fallback=True,
+        )
+        fallback.guardrail_passed = report.status == "passed"
+        fallback.retry_count = retries
+        return fallback, _agent_detail("editor", report, retries)
 
     report = verify_editor_output(
-        editor.model_dump(mode="json"),
-        [output.markdown for output in analyst_outputs],
+        fallback.model_dump(mode="json"),
+        analyst_markdowns,
         verdict,
-        provider="openai-editor" if _llm_enabled() else "deterministic-editor",
-        used_fallback=used_fallback,
+        provider="deterministic-editor",
     )
-    if report.status != "passed":
-        editor = fallback
-        editor.guardrail_passed = True
-        editor.retry_count = 1
-    else:
-        editor.guardrail_passed = True
-        editor.retry_count = 1 if used_fallback else 0
-    return editor
+    fallback.guardrail_passed = report.status == "passed"
+    return fallback, _agent_detail("editor", report, 0)
 
 
-def _render_appendix_html(dispatch_result) -> str:
-    if dispatch_result.remainder_count <= 0:
+def _render_appendix_html(
+    dispatch_result: DispatchResult,
+    findings: DataQualityFindings | None,
+    schema: SchemaEvaluationFindings | None,
+) -> str:
+    """Python-rendered table of every finding not narrated by a Top-5 cluster.
+
+    ARCHITECT §5.9(d): Top-5 clusters get narrative; everything else (lower
+    ranked types + all INFO findings) must still appear in the report.
+    """
+    covered_types = {cluster.issue_type for cluster in dispatch_result.top_clusters}
+    warn_rank = _severity_rank(Severity.WARN)
+    rows: list[tuple[int, str, str, str, int]] = []
+
+    for record in (findings.anomalies if findings is not None else []):
+        effective = record.compound_severity or record.severity
+        if record.issue_type in covered_types and _severity_rank(effective) >= warn_rank:
+            continue  # already narrated by an Analyst cluster
+        rows.append((
+            _severity_rank(effective),
+            effective.value,
+            record.issue_type,
+            record.affected_column or "dataset",
+            record.affected_count,
+        ))
+    for error in (schema.integrity_errors if schema is not None else []):
+        effective = error.compound_severity or error.severity
+        if error.error_type in covered_types and _severity_rank(effective) >= warn_rank:
+            continue
+        rows.append((
+            _severity_rank(effective),
+            effective.value,
+            error.error_type,
+            error.affected_column or error.affected_table,
+            error.affected_count,
+        ))
+
+    if not rows:
         return ""
+    rows.sort(key=lambda row: (-row[0], row[2], row[3]))
+    body = "".join(
+        f"<tr><td>{html.escape(severity)}</td><td>{html.escape(issue_type)}</td>"
+        f"<td>{html.escape(scope)}</td><td>{affected}</td></tr>"
+        for _rank, severity, issue_type, scope, affected in rows
+    )
     return (
         "<section class=\"appendix\">"
-        "<h2>Appendix</h2>"
-        "<p>Additional lower-ranked findings are available in the JSON artifacts.</p>"
+        "<h2>Appendix — Remaining Findings</h2>"
+        "<table>"
+        "<thead><tr><th>Severity</th><th>Type</th><th>Scope</th><th>Affected</th></tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
         "</section>"
     )
 
@@ -360,15 +479,18 @@ async def run_multi_agent_l4(
         findings.anomalies if findings is not None else [],
         schema.integrity_errors if schema is not None else [],
     )
-    analyst_outputs = await asyncio.gather(*[
+    analyst_results = await asyncio.gather(*[
         _run_analyst(cluster)
         for cluster in dispatch_result.top_clusters
     ])
-    editor_output = await _run_editor(verdict, list(analyst_outputs), cross_table_analysis)
+    analyst_outputs = [output for output, _detail in analyst_results]
+    agent_details = [detail for _output, detail in analyst_results]
+    editor_output, editor_detail = await _run_editor(verdict, analyst_outputs, cross_table_analysis)
+    agent_details.append(editor_detail)
     result = MultiAgentResult(
-        analyst_outputs=list(analyst_outputs),
+        analyst_outputs=analyst_outputs,
         editor_output=editor_output,
-        appendix_html=_render_appendix_html(dispatch_result),
+        appendix_html=_render_appendix_html(dispatch_result, findings, schema),
         guardrail_report={},
         used_fallback=not _llm_enabled(),
     )
@@ -392,6 +514,7 @@ async def run_multi_agent_l4(
             used_fallback=True,
         )
         result.used_fallback = True
+    report.agents = agent_details
     result.guardrail_report = report.model_dump(mode="json")
     return text, report, result
 
