@@ -11,6 +11,14 @@
 </head>
 <body>
   <div class="report-shell">
+    <div class="report-topline">
+      <div>
+        <span class="product-mark">Smart EDA</span>
+        <span class="report-kind">Guarded data quality report</span>
+      </div>
+      <span class="guardrail-chip guardrail-{guardrail_status}">Guardrail {guardrail_status}</span>
+    </div>
+
     <header class="report-header">
       <div class="verdict-banner verdict-{verdict_class}">
         <div class="verdict-symbol" aria-hidden="true">{verdict_icon}</div>
@@ -30,8 +38,14 @@
     </header>
 
     <nav class="tab-bar" role="tablist" aria-label="Report sections">
-      <button id="tab-button-ai" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-ai" data-tab="ai">AI Analysis</button>
-      <button id="tab-button-stats" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-stats" data-tab="stats">Statistical Details</button>
+      <button id="tab-button-ai" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-ai" data-tab="ai">
+        <span>AI Analysis</span>
+        <small>Guardrailed narrative</small>
+      </button>
+      <button id="tab-button-stats" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-stats" data-tab="stats">
+        <span>Statistical Details</span>
+        <small>Interactive ydata profile</small>
+      </button>
     </nav>
 
     <main class="tab-panels">
@@ -45,7 +59,6 @@
     </main>
 
     <footer class="report-footer">
-      <span>Guardrail: {guardrail_status}</span>
       <span>Provider: {provider}</span>
       <span>Model: {model_info}</span>
       <span>Generated: {timestamp}</span>

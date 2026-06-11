@@ -67,7 +67,7 @@ def test_health_and_index(tmp_path, monkeypatch):
     assert client.get("/health").json() == {"status": "ok"}
     response = client.get("/")
     assert response.status_code == 200
-    assert "Smart EDA Runner" in response.text
+    assert "Data Quality Workbench" in response.text
 
 
 def test_single_job_upload_returns_outputs(tmp_path, monkeypatch):

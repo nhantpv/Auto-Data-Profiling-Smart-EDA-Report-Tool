@@ -4,20 +4,35 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Smart EDA Local</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">Local production</p>
-          <h1>Smart EDA Runner</h1>
+        <div class="brand-block">
+          <p class="eyebrow">Smart EDA Local</p>
+          <h1>Data Quality Workbench</h1>
+          <p class="topbar-copy">Profile files, inspect schema links, review guardrailed reports.</p>
         </div>
-        <div class="status-pill" id="serviceStatus">Checking</div>
+        <div class="topbar-actions" aria-label="Runtime status">
+          <div class="runtime-chip">localhost</div>
+          <div class="status-pill" id="serviceStatus">Checking</div>
+        </div>
       </header>
 
       <main class="workspace">
         <section class="control-panel" aria-label="Pipeline controls">
+          <div class="pipeline-rail" aria-label="Pipeline layers">
+            <div class="rail-step active"><span>L0</span><strong>Ingest</strong></div>
+            <div class="rail-step"><span>L1</span><strong>Profile</strong></div>
+            <div class="rail-step"><span>L2</span><strong>Detect</strong></div>
+            <div class="rail-step"><span>L3</span><strong>Verdict</strong></div>
+            <div class="rail-step"><span>L4</span><strong>Report</strong></div>
+          </div>
+
           <div class="tabs" role="tablist" aria-label="Run mode">
             <button class="tab active" type="button" data-mode="single" role="tab" aria-selected="true">Single table</button>
             <button class="tab" type="button" data-mode="multi" role="tab" aria-selected="false">Multi table</button>
@@ -90,6 +105,22 @@
               <div class="run-state idle" id="runState">Idle</div>
             </div>
           </div>
+
+          <section class="result-hero" id="resultHero" aria-label="Verdict overview">
+            <div class="verdict-mark" id="heroVerdictMark">-</div>
+            <div class="hero-copy">
+              <p class="eyebrow">Current verdict</p>
+              <h3 id="heroVerdictTitle">Waiting for a run</h3>
+              <p id="heroRationale">Run a sample or upload your data to generate a guarded EDA report.</p>
+              <div class="hero-meta" id="heroMeta">No dataset selected</div>
+            </div>
+            <div class="severity-map" id="severityMap" aria-label="Issue severity distribution">
+              <div class="severity-map-row"><span>Critical</span><strong id="sevCritical">0</strong></div>
+              <div class="severity-map-row"><span>High</span><strong id="sevHigh">0</strong></div>
+              <div class="severity-map-row"><span>Warn</span><strong id="sevWarn">0</strong></div>
+              <div class="severity-map-row"><span>Info</span><strong id="sevInfo">0</strong></div>
+            </div>
+          </section>
 
           <div class="metrics-grid">
             <div class="metric-tile">

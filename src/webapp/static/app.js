@@ -6,6 +6,15 @@ const issuesEl = document.getElementById("metricIssues");
 const missingEl = document.getElementById("metricMissing");
 const duplicatesEl = document.getElementById("metricDuplicates");
 const guardrailEl = document.getElementById("metricGuardrail");
+const resultHeroEl = document.getElementById("resultHero");
+const heroVerdictMarkEl = document.getElementById("heroVerdictMark");
+const heroVerdictTitleEl = document.getElementById("heroVerdictTitle");
+const heroRationaleEl = document.getElementById("heroRationale");
+const heroMetaEl = document.getElementById("heroMeta");
+const sevCriticalEl = document.getElementById("sevCritical");
+const sevHighEl = document.getElementById("sevHigh");
+const sevWarnEl = document.getElementById("sevWarn");
+const sevInfoEl = document.getElementById("sevInfo");
 const fileListEl = document.getElementById("fileList");
 const reportEl = document.getElementById("reportPreview");
 const resultStackEl = document.getElementById("resultStack");
@@ -60,6 +69,72 @@ function formatPercent(value) {
   return Number.isFinite(number) ? `${(number * 100).toFixed(1)}%` : "-";
 }
 
+function verdictClass(value) {
+  return String(value || "idle").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+}
+
+function verdictMark(value) {
+  const normalized = String(value || "").toUpperCase();
+  if (normalized === "READY") {
+    return "OK";
+  }
+  if (normalized === "WARN") {
+    return "!";
+  }
+  if (normalized === "NOT_READY") {
+    return "NO";
+  }
+  return "-";
+}
+
+function updateSeverityMap(summary = {}) {
+  const values = {
+    critical: Number(summary.critical || 0),
+    high: Number(summary.high || 0),
+    warn: Number(summary.warn || 0),
+    info: Number(summary.info || 0),
+  };
+  sevCriticalEl.textContent = formatInteger(values.critical);
+  sevHighEl.textContent = formatInteger(values.high);
+  sevWarnEl.textContent = formatInteger(values.warn);
+  sevInfoEl.textContent = formatInteger(values.info);
+  const max = Math.max(1, ...Object.values(values));
+  [
+    [sevCriticalEl, values.critical],
+    [sevHighEl, values.high],
+    [sevWarnEl, values.warn],
+    [sevInfoEl, values.info],
+  ].forEach(([node, value]) => {
+    node.parentElement.style.setProperty("--bar-width", `${Math.max(6, Math.round((value / max) * 100))}%`);
+  });
+}
+
+function updateHeroFromPayload(payload) {
+  const verdict = payload.dataset_verdict || {};
+  const meta = verdict.dataset_meta || {};
+  const summary = verdict.summary || {};
+  const value = verdict.verdict || (payload.status === "failed" ? "FAILED" : "RUNNING");
+  resultHeroEl.className = `result-hero verdict-${verdictClass(value)}`;
+  heroVerdictMarkEl.textContent = verdictMark(value);
+  heroVerdictTitleEl.textContent = value || "Running";
+  heroRationaleEl.textContent = verdict.verdict_rationale || payload.message || "Pipeline is running.";
+  heroMetaEl.textContent = meta.file_name
+    ? `${meta.file_name} · ${formatInteger(meta.n)} rows · ${formatInteger(meta.n_var)} columns`
+    : payload.job_id
+      ? `Job ${payload.job_id}`
+      : "No dataset selected";
+  updateSeverityMap(summary);
+}
+
+function resetHero(title, rationale, kind = "idle") {
+  resultHeroEl.className = `result-hero verdict-${kind}`;
+  heroVerdictMarkEl.textContent = kind === "failed" ? "NO" : "-";
+  heroVerdictTitleEl.textContent = title;
+  heroRationaleEl.textContent = rationale;
+  heroMetaEl.textContent = "No dataset selected";
+  updateSeverityMap({});
+}
+
 function clearStructuredResults(message = "Pipeline is running.") {
   resultStackEl.replaceChildren();
   const panel = document.createElement("section");
@@ -82,6 +157,7 @@ function setLoading(title) {
   duplicatesEl.textContent = "-";
   guardrailEl.textContent = "-";
   setProgress(0.05);
+  resetHero("Running", "The job is queued. Results will appear as soon as the pipeline finishes.", "running");
   clearReportActions();
   clearStructuredResults("The job is queued. Results will appear here as soon as the pipeline finishes.");
 }
@@ -91,6 +167,7 @@ function setError(message) {
   setRunState("failed", "Failed");
   reportEl.textContent = message || "Pipeline failed.";
   setProgress(1);
+  resetHero("Failed", message || "Pipeline failed.", "failed");
   clearReportActions();
   clearStructuredResults(message || "Pipeline failed.");
   setButtonsDisabled(false);
@@ -111,6 +188,27 @@ function verdictSummary(payload) {
     ? `${formatInteger(meta.n_duplicates)} (${formatPercent(meta.p_duplicates)})`
     : "-";
   guardrailEl.textContent = guardrail.status || "-";
+}
+
+function renderSeverityBars(summary = {}) {
+  const rows = [
+    ["critical", "Critical", Number(summary.critical || 0)],
+    ["high", "High", Number(summary.high || 0)],
+    ["warn", "Warn", Number(summary.warn || 0)],
+    ["info", "Info", Number(summary.info || 0)],
+  ];
+  const max = Math.max(1, ...rows.map((row) => row[2]));
+  const wrap = document.createElement("div");
+  wrap.className = "severity-bars";
+  rows.forEach(([key, label, value]) => {
+    const row = document.createElement("div");
+    row.className = `severity-bar severity-bar-${key}`;
+    row.style.setProperty("--bar-width", `${Math.max(4, Math.round((value / max) * 100))}%`);
+    row.appendChild(textEl("span", "", label));
+    row.appendChild(textEl("strong", "", formatInteger(value)));
+    wrap.appendChild(row);
+  });
+  return wrap;
 }
 
 function renderFiles(payload) {
@@ -185,6 +283,7 @@ function renderJobProgress(payload) {
   renderFiles(payload);
   clearStructuredResults(payload.message || "Pipeline is running.");
   reportEl.textContent = payload.report || payload.message || "Pipeline is running.";
+  updateHeroFromPayload(payload);
   updateJobActions(payload);
 }
 
@@ -201,6 +300,7 @@ function renderResult(payload) {
   renderReportActions(payload);
   const error = payload.error || {};
   reportEl.textContent = payload.report || error.detail || payload.message || "No report generated.";
+  updateHeroFromPayload(payload);
   renderStructuredResults(payload);
   setButtonsDisabled(false);
   updateJobActions(payload);
@@ -369,6 +469,7 @@ function renderVerdictPanel(payload) {
     facts.appendChild(item);
   });
   panel.appendChild(facts);
+  panel.appendChild(renderSeverityBars(summary));
 
   if (meta.is_sampled) {
     const note = textEl(
@@ -379,6 +480,25 @@ function renderVerdictPanel(payload) {
     panel.appendChild(note);
   }
   return panel;
+}
+
+function renderJoinFlow(steps = []) {
+  const flow = document.createElement("div");
+  flow.className = "join-flow";
+  if (!steps.length) {
+    flow.classList.add("empty-flow");
+    flow.textContent = "No safe join steps emitted.";
+    return flow;
+  }
+  steps.slice(0, 6).forEach((step) => {
+    const node = document.createElement("div");
+    node.className = `join-node join-${String(step.status || "unknown").toLowerCase()}`;
+    node.appendChild(textEl("span", "", `${step.child_table}.${step.child_column}`));
+    node.appendChild(textEl("strong", "", `${formatPercent(step.match_rate)} match`));
+    node.appendChild(textEl("small", "", `${formatInteger(step.before_rows)} -> ${formatInteger(step.after_rows)} rows`));
+    flow.appendChild(node);
+  });
+  return flow;
 }
 
 function renderTopIssuesPanel(payload) {
@@ -575,6 +695,7 @@ function renderCrossTablePanel(payload) {
     facts.appendChild(item);
   });
   panel.appendChild(facts);
+  panel.appendChild(renderJoinFlow(analysis.join_steps || []));
 
   const previewName = basename(analysis.preview_csv_path);
   if (previewName && payload.links?.[previewName]) {
