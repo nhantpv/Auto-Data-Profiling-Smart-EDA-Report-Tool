@@ -1,8 +1,12 @@
 """Full EDA pipeline: data file -> findings JSON + verdict [+ schema findings]."""
 import json
+import html as html_lib
 import sys
 import warnings
 from pathlib import Path
+
+import pandas as pd
+from ydata_profiling import ProfileReport
 
 warnings.filterwarnings("ignore")
 
@@ -15,6 +19,7 @@ from engines.profiling_engine import run_profiling
 from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from engines.cross_table_engine import run_cross_table_analysis
+from engines.graph_engine import reconstruct_graph
 from engines.schema_engine import (
     build_schema_findings, load_tables, load_tables_by_path, validate_schema_multi,
 )
@@ -28,7 +33,8 @@ from severity.compound import apply_compound
 from severity.aggregator import aggregate
 from severity.missingness import detect_missingness
 from reporting.summary_renderer import render_markdown_report
-from reporting.l4_report import generate_l4_report
+from reporting.l4_report import generate_multi_agent_report
+from reporting.html_merger import merge_to_tabbed_html
 
 
 def _safe_artifact_stem(name: str) -> str:
@@ -55,6 +61,8 @@ def _table_names_for_paths(data_paths: list) -> list[str]:
 def _artifact_kind(path: Path) -> str:
     if path.name == "cross_table_analysis.json":
         return "cross_table_analysis_json"
+    if path.name == "relationship_graph.json":
+        return "relationship_graph_json"
     if path.name.endswith("_findings.json"):
         return "findings_json"
     if path.name == "dataset_verdict.json":
@@ -63,6 +71,8 @@ def _artifact_kind(path: Path) -> str:
         return "guardrail_json"
     if path.suffix == ".md":
         return "report_markdown"
+    if path.suffix == ".html":
+        return "report_html"
     if path.suffix == ".png":
         return "diagnostic_chart"
     if path.suffix == ".csv":
@@ -81,9 +91,13 @@ def _artifact_source_layer(path: Path) -> str:
         return "L4_GUARDRAIL"
     if path.name == "cross_table_analysis.json":
         return "L4_CROSS_TABLE"
+    if path.name == "relationship_graph.json":
+        return "L2C_GRAPH"
     if path.name == "cross_table_dataset_preview.csv":
         return "L4_CROSS_TABLE"
     if path.name in {"summary_report.md", "l4_report.md"}:
+        return "L4_REPORTING"
+    if path.name == "smart_eda_report.html":
         return "L4_REPORTING"
     if path.suffix == ".png":
         return "L3_5_CHARTS"
@@ -123,6 +137,25 @@ def _load_tables_for_cross_analysis(data_paths: list, schema_path: str | None) -
         parsed = parse_schema(schema_path)["tables"]
         return load_tables(data_paths, parsed)
     return load_tables_by_path(data_paths)
+
+
+def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
+    if df is None:
+        return (
+            "<!doctype html><html><body>"
+            "<h1>Statistical profile</h1>"
+            "<p>Multi-table statistical details are available in the JSON artifacts.</p>"
+            "</body></html>"
+        )
+    try:
+        return ProfileReport(df, minimal=minimal, progress_bar=False).to_html()
+    except Exception as exc:
+        return (
+            "<!doctype html><html><body>"
+            "<h1>Statistical profile unavailable</h1>"
+            f"<p>{html_lib.escape(str(exc))}</p>"
+            "</body></html>"
+        )
 
 
 def _profile_data_quality(
@@ -268,12 +301,21 @@ def run(
     report_path = out / "summary_report.md"
     l4_report_path = out / "l4_report.md"
     guardrail_path = out / "guardrail_report.json"
-    l4_report, guardrail_report = generate_l4_report(findings, verdict, schema)
+    html_report_path = out / "smart_eda_report.html"
+    l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(findings, verdict, schema)
+    smart_html = merge_to_tabbed_html(
+        multi_agent_result,
+        verdict,
+        _safe_ydata_html(df, minimal=profiling_minimal),
+        guardrail_status=guardrail_report.status,
+        model_info=guardrail_report.provider,
+    )
     dq_path.write_text(findings.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
     report_path.write_text(render_markdown_report(findings, verdict, schema), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
     guardrail_path.write_text(guardrail_report.model_dump_json(indent=2), encoding="utf-8")
+    html_report_path.write_text(smart_html, encoding="utf-8")
     artifact_manifest_path = _write_artifact_manifest(out)
 
     print(f"data_quality_findings.json → {dq_path}")
@@ -281,6 +323,7 @@ def run(
     print(f"summary_report.md          → {report_path}")
     print(f"l4_report.md               → {l4_report_path}")
     print(f"guardrail_report.json      → {guardrail_path}")
+    print(f"smart_eda_report.html      → {html_report_path}")
     print(f"artifact_manifest.json     → {artifact_manifest_path}")
     output_paths.update({
         "dq_path": str(dq_path),
@@ -288,6 +331,7 @@ def run(
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),
         "guardrail_path": str(guardrail_path),
+        "html_report_path": str(html_report_path),
         "artifact_manifest_path": str(artifact_manifest_path),
     })
     return output_paths
@@ -346,16 +390,31 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     verdict = aggregate(meta, dq_findings=combined_findings.anomalies, integrity_errors=schema.integrity_errors)
 
     cross_tables = _load_tables_for_cross_analysis(data_paths, schema_path)
+    graph_result = reconstruct_graph(cross_tables, schema)
     cross_table_analysis = run_cross_table_analysis(cross_tables, schema.relationships, out)
 
     dq_path = out / "data_quality_findings.json"
     schema_out = out / "schema_evaluation_findings.json"
+    graph_path = out / "relationship_graph.json"
     cross_table_path = out / "cross_table_analysis.json"
     verdict_path = out / "dataset_verdict.json"
     report_path = out / "summary_report.md"
     l4_report_path = out / "l4_report.md"
     guardrail_path = out / "guardrail_report.json"
-    l4_report, guardrail_report = generate_l4_report(combined_findings, verdict, schema)
+    html_report_path = out / "smart_eda_report.html"
+    l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(
+        combined_findings,
+        verdict,
+        schema,
+        cross_table_analysis,
+    )
+    smart_html = merge_to_tabbed_html(
+        multi_agent_result,
+        verdict,
+        _safe_ydata_html(None, minimal=True),
+        guardrail_status=guardrail_report.status,
+        model_info=guardrail_report.provider,
+    )
     dq_path.write_text(
         json.dumps(
             _multi_data_quality_bundle(table_sources, table_findings, combined_findings),
@@ -365,29 +424,35 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         encoding="utf-8",
     )
     schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
+    graph_path.write_text(graph_result.model_dump_json(indent=2), encoding="utf-8")
     cross_table_path.write_text(cross_table_analysis.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
     report_path.write_text(render_markdown_report(combined_findings, verdict, schema), encoding="utf-8")
     l4_report_path.write_text(l4_report, encoding="utf-8")
     guardrail_path.write_text(guardrail_report.model_dump_json(indent=2), encoding="utf-8")
+    html_report_path.write_text(smart_html, encoding="utf-8")
     artifact_manifest_path = _write_artifact_manifest(out)
 
     print(f"data_quality_findings.json       → {dq_path}")
     print(f"schema_evaluation_findings.json → {schema_out}")
+    print(f"relationship_graph.json         → {graph_path}")
     print(f"cross_table_analysis.json       → {cross_table_path}")
     print(f"dataset_verdict.json            → {verdict_path}")
     print(f"summary_report.md               → {report_path}")
     print(f"l4_report.md                    → {l4_report_path}")
     print(f"guardrail_report.json           → {guardrail_path}")
+    print(f"smart_eda_report.html           → {html_report_path}")
     print(f"artifact_manifest.json          → {artifact_manifest_path}")
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),
+        "graph_path": str(graph_path),
         "cross_table_path": str(cross_table_path),
         "verdict_path": str(verdict_path),
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),
         "guardrail_path": str(guardrail_path),
+        "html_report_path": str(html_report_path),
         "artifact_manifest_path": str(artifact_manifest_path),
     }
 

@@ -1,0 +1,37 @@
+from ontology.models import (
+    AnalystOutput,
+    DatasetMeta,
+    DatasetVerdict,
+    EditorOutput,
+    MultiAgentResult,
+    Verdict,
+    VerdictSummary,
+)
+from reporting.html_merger import merge_to_tabbed_html
+
+
+def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
+    verdict = DatasetVerdict(
+        dataset_meta=DatasetMeta(
+            file_name="data.csv",
+            n=12,
+            n_var=3,
+            memory_size=0,
+            p_cells_missing=0.25,
+        ),
+        verdict=Verdict.WARN,
+        verdict_rationale="Needs review",
+        summary=VerdictSummary(total_issues=1, warn=1),
+    )
+    result = MultiAgentResult(
+        analyst_outputs=[AnalystOutput(cluster_type="MISSINGNESS", markdown="### `MISSINGNESS`\n\nOK")],
+        editor_output=EditorOutput(executive_summary="Dataset has 12 rows."),
+        used_fallback=True,
+    )
+
+    html = merge_to_tabbed_html(result, verdict, "<h1>YData</h1>", guardrail_status="passed")
+
+    assert "tab-ai" in html
+    assert "tab-stats" in html
+    assert "MISSINGNESS" in html
+    assert "&lt;h1&gt;YData&lt;/h1&gt;" in html

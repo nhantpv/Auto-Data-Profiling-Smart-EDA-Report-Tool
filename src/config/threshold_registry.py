@@ -93,7 +93,7 @@ class ThresholdRegistry:
     def _register_hardcoded_defaults(self, maturity: str, version: str) -> None:
         """Register thresholds that were previously hardcoded in various modules."""
         defaults = [
-            ("mar_auc_gate", 0.70, "Logistic AUC above which column is labelled MAR"),
+            ("mar_auc_gate", 0.65, "Logistic AUC above which column is labelled MAR"),
             ("outlier_z_score", 3.0, "Z-score threshold for outlier detection"),
             ("null_overlap_gate", 0.70, "Null overlap threshold for cross-table joins"),
             ("imbalance_gate", 0.95, "Imbalance ratio above which column is flagged"),

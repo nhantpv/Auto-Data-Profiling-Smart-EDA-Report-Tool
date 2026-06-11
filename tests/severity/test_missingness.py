@@ -111,17 +111,17 @@ class TestClassifyMissingness:
     def test_high_auc_returns_mar(self):
         assert classify_missingness(50, 0.01, 0.80) == "MAR"
 
-    def test_auc_below_gate_high_pvalue_returns_mcar(self):
-        assert classify_missingness(50, 0.30, 0.40) == "MCAR"
+    def test_auc_below_gate_returns_mcar_consistent(self):
+        assert classify_missingness(50, 0.30, 0.40) == "MCAR_CONSISTENT"
 
-    def test_auc_below_gate_low_pvalue_returns_mnar(self):
-        assert classify_missingness(50, 0.01, 0.40) == "MNAR?"
+    def test_low_mcar_pvalue_no_longer_returns_mnar(self):
+        assert classify_missingness(50, 0.01, 0.40) == "MCAR_CONSISTENT"
 
-    def test_both_none_returns_none(self):
-        assert classify_missingness(50, None, None) is None
+    def test_both_none_returns_indeterminate(self):
+        assert classify_missingness(50, None, None) == "INDETERMINATE"
 
-    def test_mcar_p_none_auc_below_gate_returns_none(self):
-        assert classify_missingness(50, None, 0.50) is None
+    def test_mcar_p_none_auc_below_gate_returns_mcar_consistent(self):
+        assert classify_missingness(50, None, 0.50) == "MCAR_CONSISTENT"
 
     def test_mcar_p_none_auc_above_gate_returns_mar(self):
         assert classify_missingness(50, None, 0.80) == "MAR"
@@ -132,7 +132,7 @@ class TestDetectMissingness:
         df = _mcar_df()
         result = detect_missingness(df)
         assert "a" in result
-        assert result["a"] in ("MCAR", "MAR", "MNAR?", None) or result.get("a") is None
+        assert result["a"] in ("MCAR_CONSISTENT", "MAR", "INDETERMINATE")
 
     def test_non_missing_col_not_in_result(self):
         df = _mcar_df()
@@ -185,6 +185,6 @@ class TestDetectMissingness:
 
         result = detect_missingness(df)
 
-        assert result == {"a": None}
+        assert result == {"a": "INDETERMINATE"}
         assert seen_lengths
-        assert max(seen_lengths) == _MAX_MISSINGNESS_ROWS
+        assert max(seen_lengths) == len(df)

@@ -93,7 +93,7 @@ class TestCalibrateImbalance:
 
 
 class TestCalibrateMissingnessEscalation:
-    """3b-3: MAR/MNAR? escalate completeness severity by 1 tier; MCAR/None do not."""
+    """3b-3: only MAR escalates completeness severity by 1 tier."""
 
     def test_mar_escalates_warn_to_high(self):
         col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MAR")
@@ -101,14 +101,14 @@ class TestCalibrateMissingnessEscalation:
         f = next(x for x in findings if x.issue_type == "MISSINGNESS")
         assert f.severity == Severity.HIGH   # WARN+1 = HIGH
 
-    def test_mnar_escalates_warn_to_high(self):
-        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MNAR?")
+    def test_indeterminate_does_not_escalate(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="INDETERMINATE")
         findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
         f = next(x for x in findings if x.issue_type == "MISSINGNESS")
-        assert f.severity == Severity.HIGH
+        assert f.severity == Severity.WARN
 
-    def test_mcar_no_escalation(self):
-        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MCAR")
+    def test_mcar_consistent_no_escalation(self):
+        col = _col(p_missing=0.10, n_missing=10, missingness_mechanism="MCAR_CONSISTENT")
         findings = calibrate_columns({"x": col}, load_calibrator_table(), n=100)
         f = next(x for x in findings if x.issue_type == "MISSINGNESS")
         assert f.severity == Severity.WARN   # unchanged

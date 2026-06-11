@@ -4,6 +4,8 @@ from guardrail.narrative import (
     NarrativeEvidence,
     build_narrative_evidence,
     validate_narrative,
+    verify_analyst_output,
+    verify_editor_output,
 )
 
 __all__ = [
@@ -12,4 +14,6 @@ __all__ = [
     "NarrativeEvidence",
     "build_narrative_evidence",
     "validate_narrative",
+    "verify_analyst_output",
+    "verify_editor_output",
 ]

@@ -5,8 +5,8 @@ Xem ARCHITECT v5.4 §5.8 (2-Tier Delivery).
 from __future__ import annotations
 
 import html
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from ontology.models import DatasetVerdict, MultiAgentResult
 
@@ -76,6 +76,106 @@ function showTab(id) {
 """
 
 
+def _paragraph(text: str) -> str:
+    return f"<p>{html.escape(text)}</p>"
+
+
+def _markdown_table(lines: list[str]) -> str:
+    rows: list[list[str]] = []
+    for line in lines:
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells and not all(set(cell) <= {"-", ":", " "} for cell in cells):
+            rows.append(cells)
+    if not rows:
+        return ""
+    head = rows[0]
+    body = rows[1:]
+    output = ["<table>", "<thead><tr>"]
+    output.extend(f"<th>{html.escape(cell)}</th>" for cell in head)
+    output.append("</tr></thead>")
+    if body:
+        output.append("<tbody>")
+        for row in body:
+            output.append("<tr>")
+            output.extend(f"<td>{html.escape(cell)}</td>" for cell in row)
+            output.append("</tr>")
+        output.append("</tbody>")
+    output.append("</table>")
+    return "".join(output)
+
+
+def _markdown_to_html(markdown: str) -> str:
+    """Small safe Markdown subset; enough for deterministic L4 output."""
+    output: list[str] = []
+    table_buffer: list[str] = []
+
+    def flush_table() -> None:
+        nonlocal table_buffer
+        if table_buffer:
+            output.append(_markdown_table(table_buffer))
+            table_buffer = []
+
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        if line.strip().startswith("|") and line.strip().endswith("|"):
+            table_buffer.append(line)
+            continue
+        flush_table()
+
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("### "):
+            output.append(f"<h3>{html.escape(stripped[4:])}</h3>")
+        elif stripped.startswith("## "):
+            output.append(f"<h2>{html.escape(stripped[3:])}</h2>")
+        elif stripped.startswith("# "):
+            output.append(f"<h1>{html.escape(stripped[2:])}</h1>")
+        elif stripped.startswith("- "):
+            output.append(f"<li>{html.escape(stripped[2:])}</li>")
+        else:
+            output.append(_paragraph(stripped))
+    flush_table()
+    return "\n".join(output)
+
+
+def _agent_content(result: MultiAgentResult) -> str:
+    sections: list[str] = []
+    editor = result.editor_output
+    if editor is not None:
+        sections.append("<section class=\"ai-section editor-section\">")
+        sections.append("<h2>Executive Summary</h2>")
+        if editor.executive_summary:
+            sections.append(_paragraph(editor.executive_summary))
+        if editor.verdict_explanation:
+            sections.append("<h2>Decision Rationale</h2>")
+            sections.append(_paragraph(editor.verdict_explanation))
+        if editor.cross_table_evaluation:
+            sections.append("<h2>Cross-table Evaluation</h2>")
+            sections.append(_paragraph(editor.cross_table_evaluation))
+        if editor.priority_ranking:
+            sections.append("<h2>Priority Ranking</h2>")
+            sections.append(_paragraph(editor.priority_ranking))
+        sections.append("</section>")
+
+    if result.analyst_outputs:
+        sections.append("<section class=\"ai-section analyst-sections\">")
+        sections.append("<h2>Analyst Sections</h2>")
+        for output in result.analyst_outputs:
+            status = "passed" if output.guardrail_passed else "failed"
+            sections.append(
+                f"<article class=\"analyst-section guardrail-{status}\">"
+                f"<div class=\"agent-meta\">{html.escape(output.cluster_type)} · guardrail {status}</div>"
+            )
+            sections.append(_markdown_to_html(output.markdown))
+            sections.append("</article>")
+        sections.append("</section>")
+
+    if result.appendix_html:
+        sections.append(result.appendix_html)
+    return "\n".join(sections) if sections else "<p>No AI analysis sections were generated.</p>"
+
+
 def merge_to_tabbed_html(
     multi_agent_result: MultiAgentResult,
     verdict: DatasetVerdict,
@@ -101,5 +201,31 @@ def merge_to_tabbed_html(
     Returns:
         Complete HTML string → ghi ra smart_eda_report.html
     """
-    # TODO: Member B implement
-    raise NotImplementedError("merge_to_tabbed_html() — Member B implement")
+    template = _load_template()
+    verdict_value = verdict.verdict.value
+    icon_by_verdict = {
+        "READY": "OK",
+        "WARN": "WARN",
+        "NOT_READY": "BLOCKED",
+    }
+    if not timestamp:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    provider = "deterministic" if multi_agent_result.used_fallback else "multi-agent"
+    return template.format(
+        verdict_class=html.escape(verdict_value),
+        verdict_value=html.escape(verdict_value),
+        verdict_icon=icon_by_verdict.get(verdict_value, ""),
+        verdict_rationale=html.escape(verdict.verdict_rationale),
+        file_name=html.escape(verdict.dataset_meta.file_name),
+        n=verdict.dataset_meta.n,
+        n_var=verdict.dataset_meta.n_var,
+        p_cells_missing=html.escape(f"{verdict.dataset_meta.p_cells_missing * 100:.1f}%"),
+        ai_analysis_content=_agent_content(multi_agent_result),
+        ydata_escaped=html.escape(ydata_html, quote=True),
+        guardrail_status=html.escape(guardrail_status),
+        provider=html.escape(provider),
+        model_info=html.escape(model_info),
+        timestamp=html.escape(timestamp),
+        css_content=_load_css(),
+        js_content=_load_js(),
+    )

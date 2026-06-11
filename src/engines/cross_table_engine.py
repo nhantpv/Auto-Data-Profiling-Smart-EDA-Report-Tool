@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import json
+import os
 from pathlib import Path
-from typing import Iterable
+import urllib.error
+import urllib.request
+from typing import Any, Iterable
 
 import pandas as pd
 import pandas.api.types as pt
 
 from ontology.models import (
+    CorrelationPairPlan,
     CrossTableAnalysis,
     CrossTableCorrelation,
+    LlmCorrelationPlan,
     RelationshipInfo,
     SafeJoinStep,
 )
@@ -293,6 +300,239 @@ def _correlations(df: pd.DataFrame, limit: int = 25) -> list[CrossTableCorrelati
     return records[:limit]
 
 
+def _columns_for_table(meta: Any) -> set[str]:
+    if isinstance(meta, pd.DataFrame):
+        return {str(column) for column in meta.columns}
+    if isinstance(meta, dict):
+        columns = meta.get("columns", [])
+        if isinstance(columns, dict):
+            return {str(column) for column in columns}
+        if isinstance(columns, list):
+            result: set[str] = set()
+            for column in columns:
+                if isinstance(column, dict) and "name" in column:
+                    result.add(str(column["name"]))
+                else:
+                    result.add(str(column))
+            return result
+    if isinstance(meta, (list, tuple, set)):
+        return {str(column) for column in meta}
+    return set()
+
+
+def _relationship_exists(pair: CorrelationPairPlan, relationships: Iterable[RelationshipInfo]) -> bool:
+    for rel in relationships:
+        if (
+            rel.parent_table == pair.parent_table
+            and rel.parent_column == pair.parent_column
+            and rel.child_table == pair.child_table
+            and rel.child_column == pair.child_column
+        ):
+            return True
+    return False
+
+
+def validate_llm_plan(
+    plan: dict[str, Any] | LlmCorrelationPlan,
+    tables_meta: dict[str, Any],
+    relationships: Iterable[RelationshipInfo],
+) -> LlmCorrelationPlan:
+    """Validate LLM Phase-1 output before any correlation is computed.
+
+    The validator rejects unknown tables/columns, unsupported aggregate
+    methods, and relationship pairs that do not exist in the deterministic
+    schema graph.
+    """
+    raw = plan.model_dump(mode="json") if isinstance(plan, LlmCorrelationPlan) else plan
+    valid_pairs: list[CorrelationPairPlan] = []
+    skipped: list[dict[str, Any]] = list(raw.get("skipped_pairs", []))
+    allowed_methods = {"mean", "sum", "count", "min", "max", "median"}
+    table_columns = {
+        table: _columns_for_table(meta)
+        for table, meta in tables_meta.items()
+    }
+
+    for index, item in enumerate(raw.get("correlation_pairs", [])):
+        try:
+            pair = CorrelationPairPlan.model_validate(item)
+        except Exception as exc:
+            skipped.append({"index": index, "reason": f"invalid_pair_shape: {exc}"})
+            continue
+
+        reasons: list[str] = []
+        if pair.parent_table not in table_columns:
+            reasons.append(f"unknown_parent_table:{pair.parent_table}")
+        if pair.child_table not in table_columns:
+            reasons.append(f"unknown_child_table:{pair.child_table}")
+        if pair.parent_table in table_columns and pair.parent_column not in table_columns[pair.parent_table]:
+            reasons.append(f"unknown_parent_column:{pair.parent_table}.{pair.parent_column}")
+        if pair.child_table in table_columns and pair.child_column not in table_columns[pair.child_table]:
+            reasons.append(f"unknown_child_column:{pair.child_table}.{pair.child_column}")
+        if pair.aggregate_method not in allowed_methods:
+            reasons.append(f"unsupported_aggregate:{pair.aggregate_method}")
+        if not _relationship_exists(pair, relationships):
+            reasons.append("relationship_not_in_schema_graph")
+
+        if reasons:
+            skipped.append({"index": index, "pair": pair.model_dump(mode="json"), "reasons": reasons})
+            continue
+        valid_pairs.append(pair)
+
+    return LlmCorrelationPlan(
+        correlation_pairs=valid_pairs,
+        skipped_pairs=skipped,
+        model=str(raw.get("model", "")),
+        temperature=float(raw.get("temperature", 0.0)),
+        seed=int(raw.get("seed", 42)),
+    )
+
+
+def _extract_openai_text(payload: dict[str, Any]) -> str:
+    if isinstance(payload.get("output_text"), str):
+        return payload["output_text"]
+    parts: list[str] = []
+    for item in payload.get("output", []):
+        for content in item.get("content", []):
+            text = content.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _call_openai_plan(prompt: str) -> dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+    model = os.getenv("SMART_EDA_L3B_MODEL", "gpt-4o-mini")
+    request_body = {
+        "model": model,
+        "instructions": (
+            "Return JSON only. Select only statistically meaningful cross-table "
+            "correlation pairs from the deterministic schema evidence. Do not invent tables or columns."
+        ),
+        "input": prompt,
+        "max_output_tokens": 900,
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI correlation planner failed: HTTP {exc.code} {body}") from exc
+    text = _extract_openai_text(payload)
+    if not text:
+        raise RuntimeError("OpenAI correlation planner returned empty text")
+    return json.loads(text)
+
+
+async def llm_plan_correlations(
+    tables_meta: dict[str, Any],
+    relationships: list[RelationshipInfo],
+) -> LlmCorrelationPlan:
+    """Phase 1: optional LLM planner, always validated before use."""
+    if os.getenv("SMART_EDA_L3B_PROVIDER", "deterministic").strip().lower() != "openai":
+        return LlmCorrelationPlan(
+            correlation_pairs=[],
+            skipped_pairs=[{"reason": "SMART_EDA_L3B_PROVIDER is not openai"}],
+            model="deterministic",
+        )
+
+    prompt = json.dumps(
+        {
+            "tables_meta": {
+                table: sorted(_columns_for_table(meta))
+                for table, meta in tables_meta.items()
+            },
+            "relationships": [rel.model_dump(mode="json") for rel in relationships],
+            "required_shape": {
+                "correlation_pairs": [
+                    {
+                        "parent_table": "table_name",
+                        "parent_column": "column_name",
+                        "child_table": "table_name",
+                        "child_column": "column_name",
+                        "aggregate_method": "mean|sum|count|min|max|median",
+                        "reasoning": "short evidence",
+                        "confidence": "high|medium|low",
+                    }
+                ],
+                "skipped_pairs": [],
+                "model": os.getenv("SMART_EDA_L3B_MODEL", "gpt-4o-mini"),
+                "temperature": 0.0,
+                "seed": 42,
+            },
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    try:
+        raw_plan = await asyncio.to_thread(_call_openai_plan, prompt)
+    except Exception as exc:
+        return LlmCorrelationPlan(
+            correlation_pairs=[],
+            skipped_pairs=[{"reason": f"planner_failed:{exc}"}],
+            model=os.getenv("SMART_EDA_L3B_MODEL", "gpt-4o-mini"),
+        )
+    return validate_llm_plan(raw_plan, tables_meta, relationships)
+
+
+def compute_planned_correlations(
+    tables: dict[str, pd.DataFrame],
+    plan: LlmCorrelationPlan,
+    limit: int = 25,
+) -> list[CrossTableCorrelation]:
+    """Phase 2: compute validated LLM-selected numeric correlations.
+
+    MVP implementation is conservative: it computes Pearson only when both
+    selected columns are numeric/parseable and there are at least 3 row-aligned
+    observations. Unsafe joins are left to ``run_cross_table_analysis``.
+    """
+    records: list[CrossTableCorrelation] = []
+    for pair in plan.correlation_pairs:
+        parent = tables.get(pair.parent_table)
+        child = tables.get(pair.child_table)
+        if parent is None or child is None:
+            continue
+        if pair.parent_column not in parent.columns or pair.child_column not in child.columns:
+            continue
+        left = pd.to_numeric(parent[pair.parent_column], errors="coerce").reset_index(drop=True)
+        right = pd.to_numeric(child[pair.child_column], errors="coerce").reset_index(drop=True)
+        n = min(len(left), len(right))
+        if n < 3:
+            continue
+        frame = pd.DataFrame({
+            "left": left.iloc[:n],
+            "right": right.iloc[:n],
+        }).dropna()
+        if len(frame) < 3 or frame["left"].nunique() <= 1 or frame["right"].nunique() <= 1:
+            continue
+        coefficient = frame["left"].corr(frame["right"], method="pearson")
+        if pd.isna(coefficient):
+            continue
+        coefficient = round(float(coefficient), 4)
+        records.append(CrossTableCorrelation(
+            left_feature=f"{pair.parent_table}.{pair.parent_column}",
+            right_feature=f"{pair.child_table}.{pair.child_column}",
+            left_table=pair.parent_table,
+            right_table=pair.child_table,
+            method=f"pearson_row_aligned_{pair.aggregate_method}",
+            coefficient=coefficient,
+            abs_coefficient=round(abs(coefficient), 4),
+            n=int(len(frame)),
+        ))
+    records.sort(key=lambda item: (item.abs_coefficient, item.n), reverse=True)
+    return records[:limit]
+
+
 def run_cross_table_analysis(
     tables: dict[str, pd.DataFrame],
     relationships: list[RelationshipInfo],
@@ -307,6 +547,8 @@ def run_cross_table_analysis(
     direct_relationships = [
         rel for rel in relationships
         if rel.child_table == fact_table and rel.parent_table in tables
+        and rel.decision in {"accepted_for_safe_join", "declared_relationship"}
+        and rel.confidence_bucket in {"HIGH_CONFIDENCE", "DECLARED"}
     ]
     direct_relationships.sort(key=lambda rel: (rel.confidence, rel.parent_table, rel.child_column), reverse=True)
     if not direct_relationships:

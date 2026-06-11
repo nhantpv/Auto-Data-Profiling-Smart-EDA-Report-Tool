@@ -107,7 +107,6 @@ def load_schema_inference_policy(path: str | Path | None = None) -> dict:
 _SCHEMA_POLICY = load_schema_inference_policy()
 _THRESHOLDS = _SCHEMA_POLICY["thresholds"]
 _PK_WEIGHTS = _SCHEMA_POLICY["primary_key_weights"]
-_REL_WEIGHTS = _SCHEMA_POLICY["relationship_weights"]
 
 # ── Type family mapping ───────────────────────────────────────────────────────
 
@@ -711,6 +710,102 @@ def _has_required_relationship_semantics(child_col: str, parent_col: str, parent
     return bool(child_concepts & parent_concepts)
 
 
+def _parent_key_profile(parent: pd.Series) -> dict:
+    non_null = parent.dropna()
+    exact_dedupe = parent.to_frame().drop_duplicates().iloc[:, 0].dropna()
+    return {
+        "non_null_count": int(len(non_null)),
+        "is_unique": _is_unique_key(parent),
+        "is_unique_after_exact_dedupe": bool(
+            len(exact_dedupe) > 0
+            and exact_dedupe.nunique(dropna=True) == len(exact_dedupe)
+        ),
+    }
+
+
+def _relationship_decision(
+    child_df: pd.DataFrame,
+    child_col: str,
+    parent_df: pd.DataFrame,
+    parent_col: str,
+    parent_table: str,
+) -> dict:
+    child_tokens = set(_identifier_tokens(child_col))
+    child_is_generic_unique_id = (
+        bool(child_tokens)
+        and child_tokens <= _GENERIC_TOKENS
+        and _is_unique_key(child_df[child_col])
+    )
+    coverage, total, unmatched = _value_coverage(child_df[child_col], parent_df[parent_col])
+    name_score = _relationship_name_score(child_col, parent_col, parent_table)
+    semantic_gate_passed = _has_required_relationship_semantics(child_col, parent_col, parent_table)
+    parent_profile = _parent_key_profile(parent_df[parent_col])
+
+    blocked_reasons: list[str] = []
+    decision_reasons: list[str] = []
+
+    if child_is_generic_unique_id:
+        blocked_reasons.append("child_column_is_generic_unique_identifier")
+    if total == 0:
+        blocked_reasons.append("child_column_has_no_non_null_values")
+    if parent_profile["non_null_count"] == 0:
+        blocked_reasons.append("parent_key_has_no_non_null_values")
+    if coverage < _THRESHOLDS["relationship_value_coverage"]:
+        blocked_reasons.append(
+            f"value_coverage_below_threshold:{coverage:.3f}<{_THRESHOLDS['relationship_value_coverage']:.3f}"
+        )
+    else:
+        decision_reasons.append("value_coverage_passed")
+    if not semantic_gate_passed:
+        blocked_reasons.append("semantic_gate_failed_for_generic_parent_key")
+    else:
+        decision_reasons.append("semantic_gate_passed")
+    if name_score < _THRESHOLDS["relationship_name_score"]:
+        blocked_reasons.append(
+            f"name_match_below_threshold:{name_score:.3f}<{_THRESHOLDS['relationship_name_score']:.3f}"
+        )
+    else:
+        decision_reasons.append("name_match_passed")
+
+    if parent_profile["is_unique"]:
+        decision_reasons.append("parent_key_unique")
+    elif parent_profile["is_unique_after_exact_dedupe"]:
+        decision_reasons.append("parent_key_unique_after_exact_dedupe")
+    else:
+        decision_reasons.append("parent_key_requires_safe_join_dedupe")
+
+    decision = "rejected"
+    confidence_bucket = "REJECTED"
+    if not blocked_reasons:
+        decision = "accepted_for_safe_join"
+        confidence_bucket = "HIGH_CONFIDENCE"
+
+    return {
+        "decision": decision,
+        "confidence_bucket": confidence_bucket,
+        "decision_reasons": decision_reasons,
+        "blocked_reasons": blocked_reasons,
+        "confidence": round(coverage, 3),
+        "evidence": [
+            f"value_coverage={coverage:.3f} ({total - unmatched}/{total} non-null child values found in parent)",
+            f"unmatched_non_null_child_values={unmatched}",
+            f"name_score={name_score:.3f}",
+            f"semantic_gate_passed={semantic_gate_passed}",
+            f"parent_key_unique={parent_profile['is_unique']}",
+        ],
+        "evidence_metrics": {
+            "value_coverage": round(coverage, 4),
+            "non_null_child_values": total,
+            "matched_non_null_child_values": total - unmatched,
+            "unmatched_non_null_child_values": unmatched,
+            "name_score": round(name_score, 4),
+            "semantic_gate_passed": semantic_gate_passed,
+            "child_is_generic_unique_identifier": child_is_generic_unique_id,
+            **parent_profile,
+        },
+    }
+
+
 def _explicit_relationships(refs: list) -> list[RelationshipInfo]:
     return [
         RelationshipInfo(
@@ -722,6 +817,10 @@ def _explicit_relationships(refs: list) -> list[RelationshipInfo]:
             status="declared_in_schema",
             confidence=1.0,
             evidence=["Declared in schema metadata"],
+            decision="declared_relationship",
+            confidence_bucket="DECLARED",
+            decision_reasons=["declared_in_schema_metadata"],
+            evidence_metrics={"declared_in_schema": True},
         )
         for ref in refs
     ]
@@ -746,34 +845,18 @@ def infer_relationships(
             for parent_col in _candidate_parent_columns(parent_t, parent_df, parsed):
                 if parent_col not in parent_df.columns:
                     continue
-                parent_unique_bonus = _REL_WEIGHTS["parent_unique_bonus"] if _is_unique_key(parent_df[parent_col]) else 0.0
                 for child_col in child_df.columns:
                     key = _ref_key(child_t, child_col, parent_t, parent_col)
                     if key in explicit_keys:
                         continue
-                    child_tokens = set(_identifier_tokens(child_col))
-                    child_is_generic_unique_id = (
-                        bool(child_tokens)
-                        and child_tokens <= _GENERIC_TOKENS
-                        and _is_unique_key(child_df[child_col])
+                    decision = _relationship_decision(
+                        child_df,
+                        child_col,
+                        parent_df,
+                        parent_col,
+                        parent_t,
                     )
-                    if child_is_generic_unique_id:
-                        continue
-                    coverage, total, unmatched = _value_coverage(child_df[child_col], parent_df[parent_col])
-                    if coverage < _THRESHOLDS["relationship_value_coverage"]:
-                        continue
-                    name_score = _relationship_name_score(child_col, parent_col, parent_t)
-                    if not _has_required_relationship_semantics(child_col, parent_col, parent_t):
-                        continue
-                    if name_score < _THRESHOLDS["relationship_name_score"] and parent_unique_bonus == 0.0:
-                        continue
-                    confidence = round(min(
-                        0.99,
-                        (_REL_WEIGHTS["coverage"] * coverage)
-                        + (_REL_WEIGHTS["name_score"] * name_score)
-                        + parent_unique_bonus,
-                    ), 3)
-                    if confidence < _THRESHOLDS["relationship_confidence"]:
+                    if decision["decision"] != "accepted_for_safe_join":
                         continue
                     relationships.append(RelationshipInfo(
                         child_table=child_t,
@@ -782,12 +865,13 @@ def infer_relationships(
                         parent_column=parent_col,
                         relationship_type="inferred_fk",
                         status=inferred_status,
-                        confidence=confidence,
-                        evidence=[
-                            f"value_coverage={coverage:.3f} ({total - unmatched}/{total} non-null child values found in parent)",
-                            f"unmatched_non_null_child_values={unmatched}",
-                            f"name_score={name_score:.3f}",
-                        ],
+                        confidence=decision["confidence"],
+                        evidence=decision["evidence"],
+                        decision=decision["decision"],
+                        confidence_bucket=decision["confidence_bucket"],
+                        decision_reasons=decision["decision_reasons"],
+                        blocked_reasons=decision["blocked_reasons"],
+                        evidence_metrics=decision["evidence_metrics"],
                     ))
 
     return relationships

@@ -108,8 +108,8 @@ def render_markdown_report(
             lines.extend([
                 "## Table Relationships",
                 "",
-                "| Type | Status | Relationship | Confidence | Evidence |",
-                "| --- | --- | --- | --- | --- |",
+                "| Type | Status | Decision | Bucket | Relationship | Evidence |",
+                "| --- | --- | --- | --- | --- | --- |",
             ])
             for rel in schema.relationships[:10]:
                 relationship = (
@@ -118,8 +118,8 @@ def render_markdown_report(
                 )
                 evidence = "; ".join(rel.evidence)
                 lines.append(
-                    f"| {rel.relationship_type} | {rel.status} | {relationship} | "
-                    f"{rel.confidence:.2f} | {evidence} |"
+                    f"| {rel.relationship_type} | {rel.status} | {rel.decision} | "
+                    f"{rel.confidence_bucket} | {relationship} | {evidence} |"
                 )
             lines.append("")
 

@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import urllib.error
 import urllib.request
 from typing import Any
 
-from guardrail import GuardrailReport, validate_narrative
-from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings
+from guardrail import (
+    GuardrailReport,
+    validate_narrative,
+    verify_analyst_output,
+    verify_editor_output,
+)
+from ontology.models import (
+    AnalystOutput,
+    CrossTableAnalysis,
+    DataQualityFindings,
+    DatasetVerdict,
+    EditorOutput,
+    IssueCluster,
+    MultiAgentResult,
+    SchemaEvaluationFindings,
+)
+from reporting.dispatcher import dispatch
 
 
 def _pct(value: float) -> str:
@@ -55,6 +71,365 @@ def _compact_payload(
         ]
         payload["relationships"] = [rel.model_dump() for rel in schema.relationships[:10]]
     return payload
+
+
+def _extract_openai_text(payload: dict[str, Any]) -> str:
+    if isinstance(payload.get("output_text"), str):
+        return payload["output_text"]
+    parts: list[str] = []
+    for item in payload.get("output", []):
+        for content in item.get("content", []):
+            text = content.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts).strip()
+
+
+def _call_openai(prompt: str, instructions: str, model_env: str, default_model: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
+
+    model = os.getenv(model_env, default_model)
+    request_body = {
+        "model": model,
+        "instructions": instructions,
+        "input": prompt,
+        "max_output_tokens": 1200,
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenAI L4 request failed: HTTP {exc.code} {body}") from exc
+
+    text = _extract_openai_text(response_payload)
+    if not text:
+        raise RuntimeError("OpenAI L4 response did not include text")
+    return text
+
+
+def _llm_enabled() -> bool:
+    return os.getenv("SMART_EDA_L4_PROVIDER", "deterministic").strip().lower() == "openai"
+
+
+async def _call_openai_async(
+    prompt: str,
+    instructions: str,
+    model_env: str,
+    default_model: str,
+) -> str:
+    return await asyncio.to_thread(_call_openai, prompt, instructions, model_env, default_model)
+
+
+def _render_cluster_markdown(cluster: IssueCluster) -> str:
+    lines = [
+        f"### `{cluster.issue_type}`",
+        "",
+        f"Effective severity: `{cluster.max_severity}`.",
+    ]
+    if cluster.affected_columns:
+        lines.append("Affected scope: " + ", ".join(f"`{column}`" for column in cluster.affected_columns) + ".")
+    lines.extend([
+        "",
+        "| Severity | Scope | Affected |",
+        "| --- | --- | --- |",
+    ])
+    for issue in cluster.issues[:10]:
+        severity = issue.get("compound_severity") or issue.get("severity") or cluster.max_severity
+        scope = issue.get("affected_column") or issue.get("affected_table") or "dataset"
+        affected_count = issue.get("affected_count", 0)
+        affected_percent = issue.get("affected_percent")
+        if affected_percent is None:
+            affected_text = f"`{affected_count}`"
+        else:
+            affected_text = f"`{affected_count}` (`{_pct(float(affected_percent))}`)"
+        lines.append(f"| `{severity}` | {_issue_scope(scope if scope != 'dataset' else None)} | {affected_text} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+async def _run_analyst(cluster: IssueCluster) -> AnalystOutput:
+    fallback_markdown = _render_cluster_markdown(cluster)
+    used_fallback = False
+    markdown = fallback_markdown
+
+    if _llm_enabled():
+        prompt = (
+            "Write one concise Markdown section for this issue cluster. "
+            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
+            f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
+        )
+        try:
+            markdown = await _call_openai_async(
+                prompt,
+                (
+                    "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
+                    "Do not invent numbers, thresholds, columns, tables, or recommendations."
+                ),
+                "SMART_EDA_L4_ANALYST_MODEL",
+                "gpt-4o-mini",
+            )
+        except Exception:
+            markdown = fallback_markdown
+            used_fallback = True
+
+    report = verify_analyst_output(
+        markdown,
+        cluster.json_slice,
+        provider="openai-analyst" if _llm_enabled() else "deterministic-analyst",
+        used_fallback=used_fallback,
+    )
+    if report.status != "passed":
+        markdown = fallback_markdown
+        report = verify_analyst_output(
+            markdown,
+            cluster.json_slice,
+            provider="deterministic-analyst",
+            used_fallback=True,
+        )
+        used_fallback = True
+
+    return AnalystOutput(
+        cluster_type=cluster.issue_type,
+        markdown=markdown,
+        guardrail_passed=report.status == "passed",
+        retry_count=1 if used_fallback else 0,
+    )
+
+
+def _cross_table_summary(cross_table_analysis: CrossTableAnalysis | None) -> str | None:
+    if cross_table_analysis is None:
+        return None
+    if cross_table_analysis.status != "completed":
+        return f"Cross-table analysis status is {cross_table_analysis.status}."
+    if cross_table_analysis.correlations:
+        top = cross_table_analysis.correlations[0]
+        return (
+            f"Cross-table analysis used fact table {cross_table_analysis.fact_table} "
+            f"and found strongest Pearson pair {top.left_feature} vs {top.right_feature}."
+        )
+    return f"Cross-table analysis used fact table {cross_table_analysis.fact_table}."
+
+
+async def _run_editor(
+    verdict: DatasetVerdict,
+    analyst_outputs: list[AnalystOutput],
+    cross_table_analysis: CrossTableAnalysis | None,
+) -> EditorOutput:
+    meta = verdict.dataset_meta
+    fallback = EditorOutput(
+        executive_summary=(
+            f"Dataset {meta.file_name} has {meta.n} rows and {meta.n_var} columns. "
+            f"The deterministic verdict is {verdict.verdict.value} with {verdict.summary.total_issues} total issues."
+        ),
+        verdict_explanation=verdict.verdict_rationale,
+        cross_table_evaluation=_cross_table_summary(cross_table_analysis),
+        priority_ranking=", ".join(output.cluster_type for output in analyst_outputs),
+    )
+    used_fallback = False
+    editor = fallback
+
+    if _llm_enabled():
+        payload = {
+            "verdict": verdict.model_dump(mode="json"),
+            "analyst_sections": [output.markdown for output in analyst_outputs],
+            "cross_table_analysis": cross_table_analysis.model_dump(mode="json") if cross_table_analysis else None,
+        }
+        prompt = (
+            "Write JSON with keys executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking. "
+            "Use only the provided evidence.\n\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
+        try:
+            text = await _call_openai_async(
+                prompt,
+                (
+                    "You are an EDA Editor agent. Return valid compact JSON only. "
+                    "Do not invent numbers, columns, tables, relationships, or thresholds."
+                ),
+                "SMART_EDA_L4_EDITOR_MODEL",
+                "gpt-4o",
+            )
+            editor = EditorOutput.model_validate_json(text)
+        except Exception:
+            editor = fallback
+            used_fallback = True
+
+    report = verify_editor_output(
+        editor.model_dump(mode="json"),
+        [output.markdown for output in analyst_outputs],
+        verdict,
+        provider="openai-editor" if _llm_enabled() else "deterministic-editor",
+        used_fallback=used_fallback,
+    )
+    if report.status != "passed":
+        editor = fallback
+        editor.guardrail_passed = True
+        editor.retry_count = 1
+    else:
+        editor.guardrail_passed = True
+        editor.retry_count = 1 if used_fallback else 0
+    return editor
+
+
+def _render_appendix_html(dispatch_result) -> str:
+    if dispatch_result.remainder_count <= 0:
+        return ""
+    return (
+        "<section class=\"appendix\">"
+        "<h2>Appendix</h2>"
+        "<p>Additional lower-ranked findings are available in the JSON artifacts.</p>"
+        "</section>"
+    )
+
+
+def render_multi_agent_markdown(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
+    meta = verdict.dataset_meta
+    editor = result.editor_output or EditorOutput()
+    lines = [
+        "# L4 Guarded EDA Report",
+        "",
+        "## Executive Summary",
+        "",
+        editor.executive_summary or (
+            f"Dataset {meta.file_name} has {meta.n} rows and {meta.n_var} columns."
+        ),
+        "",
+        "## Decision Rationale",
+        "",
+        editor.verdict_explanation or verdict.verdict_rationale,
+        "",
+        "## Data Quality Analysis",
+        "",
+    ]
+    if result.analyst_outputs:
+        for output in result.analyst_outputs:
+            lines.extend([output.markdown, ""])
+    else:
+        lines.extend(["No WARN, HIGH, or CRITICAL issues were dispatched to Analyst sections.", ""])
+
+    if editor.cross_table_evaluation:
+        lines.extend([
+            "## Cross-table Evaluation",
+            "",
+            editor.cross_table_evaluation,
+            "",
+        ])
+
+    if editor.priority_ranking:
+        lines.extend([
+            "## Priority Ranking",
+            "",
+            editor.priority_ranking,
+            "",
+        ])
+
+    lines.extend([
+        "## Guardrail Statement",
+        "",
+        "This report is generated only from deterministic JSON evidence. Numeric values and backticked fields are checked against the evidence set before the file is written.",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+async def run_multi_agent_l4(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+) -> tuple[str, GuardrailReport, MultiAgentResult]:
+    dispatch_result = dispatch(
+        findings.anomalies if findings is not None else [],
+        schema.integrity_errors if schema is not None else [],
+    )
+    analyst_outputs = await asyncio.gather(*[
+        _run_analyst(cluster)
+        for cluster in dispatch_result.top_clusters
+    ])
+    editor_output = await _run_editor(verdict, list(analyst_outputs), cross_table_analysis)
+    result = MultiAgentResult(
+        analyst_outputs=list(analyst_outputs),
+        editor_output=editor_output,
+        appendix_html=_render_appendix_html(dispatch_result),
+        guardrail_report={},
+        used_fallback=not _llm_enabled(),
+    )
+    text = render_multi_agent_markdown(result, verdict)
+    report = validate_narrative(
+        text,
+        findings,
+        verdict,
+        schema,
+        provider="openai-multi-agent" if _llm_enabled() else "deterministic-multi-agent",
+        used_fallback=result.used_fallback,
+    )
+    if report.status != "passed":
+        text = render_deterministic_l4_report(findings, verdict, schema)
+        report = validate_narrative(
+            text,
+            findings,
+            verdict,
+            schema,
+            provider="deterministic-fallback",
+            used_fallback=True,
+        )
+        result.used_fallback = True
+    result.guardrail_report = report.model_dump(mode="json")
+    return text, report, result
+
+
+def _run_multi_agent_sync(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+) -> tuple[str, GuardrailReport, MultiAgentResult]:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(run_multi_agent_l4(findings, verdict, schema, cross_table_analysis))
+
+    # FastAPI currently calls the pipeline synchronously. If a caller is already
+    # in an event loop, avoid nested asyncio.run() and use deterministic fallback.
+    text = render_deterministic_l4_report(findings, verdict, schema)
+    report = validate_narrative(
+        text,
+        findings,
+        verdict,
+        schema,
+        provider="deterministic-fallback",
+        used_fallback=True,
+    )
+    result = MultiAgentResult(
+        editor_output=EditorOutput(
+            executive_summary=f"Dataset {verdict.dataset_meta.file_name} has {verdict.dataset_meta.n} rows.",
+            verdict_explanation=verdict.verdict_rationale,
+        ),
+        guardrail_report=report.model_dump(mode="json"),
+        used_fallback=True,
+    )
+    return text, report, result
+
+
+def generate_multi_agent_report(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+) -> tuple[str, GuardrailReport, MultiAgentResult]:
+    return _run_multi_agent_sync(findings, verdict, schema, cross_table_analysis)
 
 
 def render_deterministic_l4_report(
@@ -140,12 +515,14 @@ def render_deterministic_l4_report(
             lines.extend([
                 "## Inferred Or Explicit Relationships",
                 "",
-                "| Status | Relationship | Confidence |",
-                "| --- | --- | --- |",
+                "| Status | Decision | Bucket | Relationship |",
+                "| --- | --- | --- | --- |",
             ])
             for rel in schema.relationships[:10]:
                 relationship = f"{rel.child_table}.{rel.child_column} -> {rel.parent_table}.{rel.parent_column}"
-                lines.append(f"| `{rel.status}` | `{relationship}` | `{rel.confidence:.3f}` |")
+                lines.append(
+                    f"| `{rel.status}` | `{rel.decision}` | `{rel.confidence_bucket}` | `{relationship}` |"
+                )
             lines.append("")
 
     lines.extend([
@@ -155,57 +532,6 @@ def render_deterministic_l4_report(
         "",
     ])
     return "\n".join(lines)
-
-
-def _extract_openai_text(payload: dict[str, Any]) -> str:
-    if isinstance(payload.get("output_text"), str):
-        return payload["output_text"]
-    parts: list[str] = []
-    for item in payload.get("output", []):
-        for content in item.get("content", []):
-            text = content.get("text")
-            if isinstance(text, str):
-                parts.append(text)
-    return "\n".join(parts).strip()
-
-
-def _call_openai(prompt: str) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
-
-    model = os.getenv("SMART_EDA_L4_MODEL", "gpt-5")
-    request_body = {
-        "model": model,
-        "instructions": (
-            "Write a concise end-user EDA report in Markdown. "
-            "Use only facts from the provided JSON evidence. "
-            "Do not invent numbers, columns, tables, relationships, thresholds, charts, or recommendations. "
-            "Put every numeric value and every field/table/issue reference inside backticks."
-        ),
-        "input": prompt,
-        "max_output_tokens": 1200,
-    }
-    request = urllib.request.Request(
-        "https://api.openai.com/v1/responses",
-        data=json.dumps(request_body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            response_payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI L4 request failed: HTTP {exc.code} {body}") from exc
-
-    text = _extract_openai_text(response_payload)
-    if not text:
-        raise RuntimeError("OpenAI L4 response did not include text")
-    return text
 
 
 def _llm_prompt(
@@ -225,29 +551,5 @@ def generate_l4_report(
     verdict: DatasetVerdict,
     schema: SchemaEvaluationFindings | None = None,
 ) -> tuple[str, GuardrailReport]:
-    provider = os.getenv("SMART_EDA_L4_PROVIDER", "deterministic").strip().lower() or "deterministic"
-    used_fallback = False
-    text: str | None = None
-
-    if provider == "openai":
-        try:
-            text = _call_openai(_llm_prompt(findings, verdict, schema))
-            report = validate_narrative(text, findings, verdict, schema, provider=provider)
-            if report.status == "passed":
-                return text, report
-            used_fallback = True
-        except Exception:
-            used_fallback = True
-    else:
-        provider = "deterministic"
-
-    text = render_deterministic_l4_report(findings, verdict, schema)
-    report = validate_narrative(
-        text,
-        findings,
-        verdict,
-        schema,
-        provider=provider,
-        used_fallback=used_fallback,
-    )
+    text, report, _result = generate_multi_agent_report(findings, verdict, schema)
     return text, report

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import Any, Iterable
 
 from pydantic import BaseModel, Field
 
@@ -73,6 +73,112 @@ def _normalize_numeric_token(token: str) -> str:
         return _norm_number(float(token)) or token
     except ValueError:
         return token
+
+
+def _collect_evidence_values(value: Any, numbers: set[str], references: set[str]) -> None:
+    """Collect primitive values from JSON-like evidence for agent-level checks."""
+    if value is None:
+        return
+    if isinstance(value, bool):
+        references.add(str(value))
+        return
+    if isinstance(value, (int, float)):
+        norm = _norm_number(value)
+        if norm is not None:
+            numbers.add(norm)
+        if isinstance(value, float) and 0.0 <= value <= 1.0:
+            percent = _norm_percent(value)
+            if percent is not None:
+                numbers.add(percent)
+        return
+    if isinstance(value, str):
+        references.add(value)
+        for token in _NUMERIC_TOKEN.findall(value):
+            numbers.add(_normalize_numeric_token(token))
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            references.add(str(key))
+            _collect_evidence_values(item, numbers, references)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            _collect_evidence_values(item, numbers, references)
+
+
+def _report_for_text(
+    text: str,
+    numbers: set[str],
+    references: set[str],
+    provider: str,
+    used_fallback: bool = False,
+) -> GuardrailReport:
+    checked_numbers = [_normalize_numeric_token(token) for token in _NUMERIC_TOKEN.findall(text)]
+    checked_references = [
+        token for token in _BACKTICK_TOKEN.findall(text)
+        if _normalize_numeric_token(token) not in numbers
+    ]
+
+    violations: list[GuardrailViolation] = []
+    for token in checked_numbers:
+        if token not in numbers:
+            violations.append(GuardrailViolation(
+                check="number_allowed_set",
+                value=token,
+                detail="Number is not present in the evidence allowed set.",
+            ))
+
+    for reference in checked_references:
+        if reference not in references:
+            violations.append(GuardrailViolation(
+                check="reference_allowed_set",
+                value=reference,
+                detail="Backticked reference is not present in the evidence allowed set.",
+            ))
+
+    return GuardrailReport(
+        status="passed" if not violations else "failed",
+        provider=provider,
+        used_fallback=used_fallback,
+        checked_numbers=checked_numbers,
+        checked_references=checked_references,
+        violations=violations,
+        allowed_numbers_count=len(numbers),
+        allowed_references_count=len(references),
+    )
+
+
+def verify_analyst_output(
+    markdown: str,
+    evidence: dict[str, Any],
+    provider: str = "analyst",
+    used_fallback: bool = False,
+) -> GuardrailReport:
+    """Validate one Analyst section against only its assigned JSON slice."""
+    numbers: set[str] = {"0", "10", "100", "0.0%"}
+    references: set[str] = {"INFO", "WARN", "HIGH", "CRITICAL", "READY", "NOT_READY"}
+    _collect_evidence_values(evidence, numbers, references)
+    return _report_for_text(markdown, numbers, references, provider, used_fallback)
+
+
+def verify_editor_output(
+    editor_json: dict[str, Any],
+    analyst_markdowns: list[str],
+    verdict: DatasetVerdict,
+    provider: str = "editor",
+    used_fallback: bool = False,
+) -> GuardrailReport:
+    """Validate Editor output against verdict evidence plus approved Analyst text."""
+    numbers: set[str] = {"0", "10", "100", "0.0%"}
+    references: set[str] = {"INFO", "WARN", "HIGH", "CRITICAL", "READY", "NOT_READY"}
+    _collect_evidence_values(verdict.model_dump(mode="json"), numbers, references)
+    for markdown in analyst_markdowns:
+        for token in _NUMERIC_TOKEN.findall(markdown):
+            numbers.add(_normalize_numeric_token(token))
+        for token in _BACKTICK_TOKEN.findall(markdown):
+            references.add(token)
+    text = "\n".join(str(value) for value in editor_json.values() if value is not None)
+    return _report_for_text(text, numbers, references, provider, used_fallback)
 
 
 def build_narrative_evidence(
@@ -169,6 +275,10 @@ def build_narrative_evidence(
             references.add(rel_ref)
             references.add(rel.status)
             references.add(rel.relationship_type)
+            references.add(rel.decision)
+            references.add(rel.confidence_bucket)
+            references.update(rel.decision_reasons)
+            references.update(rel.blocked_reasons)
             references.add(rel.child_table)
             references.add(rel.parent_table)
             references.add(rel.child_column)
@@ -176,6 +286,9 @@ def build_narrative_evidence(
             references.add(f"{rel.child_table}.{rel.child_column}")
             references.add(f"{rel.parent_table}.{rel.parent_column}")
             _add_numbers(numbers, [rel.confidence])
+            for metric in rel.evidence_metrics.values():
+                if isinstance(metric, (int, float, bool)):
+                    _add_numbers(numbers, [int(metric) if isinstance(metric, bool) else metric])
 
     return NarrativeEvidence(numbers=numbers, references=references)
 

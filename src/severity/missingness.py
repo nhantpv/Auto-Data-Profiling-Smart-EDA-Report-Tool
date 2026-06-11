@@ -16,7 +16,8 @@ from sklearn.model_selection import cross_val_score
 
 logger = logging.getLogger(__name__)
 
-_MAR_AUC_GATE = 0.70   # AUC above which we label a column MAR (ARCHITECT v5.4)
+_MAR_AUC_GATE = 0.65   # AUC above which we label a column MAR (ARCHITECT v5.4)
+_MCAR_ALPHA = 0.05     # Diagnostic only; Little's test does not drive labels.
 _MAX_MISSINGNESS_ROWS = 10_000
 _SAMPLE_RANDOM_STATE = 42
 
@@ -56,6 +57,18 @@ def mar_auc(df: pd.DataFrame, col: str) -> float | None:
         return None
 
 
+def little_mcar_pvalue(df: pd.DataFrame) -> float | None:
+    """Optional diagnostic placeholder for legacy callers.
+
+    ARCHITECT v5.4 retired dataset-level Little's test as a decision driver
+    because a single p-value cannot be broadcast safely to every column.
+    """
+    numeric = df.select_dtypes(include="number")
+    if numeric.shape[1] < 2 or not numeric.isna().any().any():
+        return None
+    return None
+
+
 # ── Per-column classification (H5 fix) ───────────────────────────────────────
 
 def classify_missingness_per_column(
@@ -77,6 +90,15 @@ def classify_missingness_per_column(
     if auc is not None:
         return "MCAR_CONSISTENT"
     return "INDETERMINATE"
+
+
+def classify_missingness(
+    col_missing: int,
+    mcar_pvalue: float | None,
+    auc: float | None,
+) -> str | None:
+    """Legacy signature; classification now ignores dataset-level MCAR p-value."""
+    return classify_missingness_per_column(col_missing, auc)
 
 
 # ── Sampling helper ──────────────────────────────────────────────────────────
@@ -122,12 +144,10 @@ def detect_missingness(df: pd.DataFrame, max_rows: int = _MAX_MISSINGNESS_ROWS) 
     if not missing_cols:
         return {}
 
-    sampled_df = sample_missingness_frame(df, max_rows=max_rows)
-
     result: dict[str, str | None] = {}
     for col in missing_cols:
-        n_missing = sampled_df[col].isna().sum() if col in sampled_df.columns else 0
-        auc = mar_auc(sampled_df, col) if col in sampled_df.columns else None
+        n_missing = df[col].isna().sum() if col in df.columns else 0
+        auc = mar_auc(df, col) if col in df.columns else None
         mech = classify_missingness_per_column(n_missing, auc)
         result[col] = mech
     return result

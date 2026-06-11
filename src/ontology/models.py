@@ -160,6 +160,11 @@ class RelationshipInfo(BaseModel):
     status: str
     confidence: float
     evidence: List[str] = Field(default_factory=list)
+    decision: str = "accepted_for_safe_join"
+    confidence_bucket: str = "HIGH_CONFIDENCE"
+    decision_reasons: List[str] = Field(default_factory=list)
+    blocked_reasons: List[str] = Field(default_factory=list)
+    evidence_metrics: Dict[str, Any] = Field(default_factory=dict)
 
 
 class IntegrityError(BaseModel):

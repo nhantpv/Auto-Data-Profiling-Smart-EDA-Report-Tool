@@ -87,7 +87,11 @@ def _threshold_severity(value: float, thresholds: list, fallback: Severity = Sev
     return Severity.CRITICAL
 
 
-def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | None = None) -> Dict[str, ColumnStats]:
+def _extract_column_stats(
+    variables: Dict[str, Any],
+    df: pd.DataFrame | None = None,
+    mechs: Dict[str, Any] | None = None,
+) -> Dict[str, ColumnStats]:
     columns = {}
     for col_name, col_data in variables.items():
         col_type = col_data.get("type", "Unknown")
@@ -97,6 +101,14 @@ def _extract_column_stats(variables: Dict[str, Any], mechs: Dict[str, Any] | Non
             "Unsupported": "Unsupported",
         }
         simple_type = type_map.get(col_type, col_type)
+        if df is not None and col_name in df.columns:
+            series = df[col_name]
+            if pd.api.types.is_bool_dtype(series):
+                simple_type = "Boolean"
+            elif pd.api.types.is_numeric_dtype(series):
+                simple_type = "Numeric"
+            elif pd.api.types.is_datetime64_any_dtype(series):
+                simple_type = "DateTime"
 
         n_missing = col_data.get("n_missing", 0)
         p_missing = col_data.get("p_missing", 0.0)
@@ -162,7 +174,7 @@ def build_data_quality_findings(
 
     if mechs is None:
         mechs = detect_missingness(df)
-    columns = _extract_column_stats(profile_result.get("variables", {}), mechs=mechs)
+    columns = _extract_column_stats(profile_result.get("variables", {}), df=df, mechs=mechs)
 
     cal_table = load_calibrator_table()
     registry = FindingRegistry()

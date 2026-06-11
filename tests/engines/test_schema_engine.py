@@ -500,6 +500,11 @@ Table students {
         assert inferred[0].parent_table == "schools"
         assert inferred[0].parent_column == "id"
         assert inferred[0].status == "missing_from_schema"
+        assert inferred[0].decision == "accepted_for_safe_join"
+        assert inferred[0].confidence_bucket == "HIGH_CONFIDENCE"
+        assert inferred[0].blocked_reasons == []
+        assert inferred[0].evidence_metrics["value_coverage"] == 1.0
+        assert "value_coverage_passed" in inferred[0].decision_reasons
 
         missing_ref = [e for e in findings.integrity_errors if e.error_type == "MISSING_RELATIONSHIP_METADATA"]
         assert len(missing_ref) == 1
@@ -536,6 +541,8 @@ Table students {
         }
         assert ("students", "truong_hoc", "schools", "id_school", "inferred_from_data") in relationship_keys
         assert ("students", "class_id", "classes", "class_id", "inferred_from_data") in relationship_keys
+        assert all(r.decision == "accepted_for_safe_join" for r in relationships)
+        assert all(r.confidence_bucket == "HIGH_CONFIDENCE" for r in relationships)
 
         orphans = [e for e in findings.integrity_errors if e.error_type == "ORPHAN_FOREIGN_KEY"]
         orphan_keys = {(e.affected_table, e.affected_column) for e in orphans}
@@ -543,6 +550,24 @@ Table students {
         assert ("students", "class_id") in orphan_keys
         assert any(sample.get("truong_hoc") == "S99" for e in orphans for sample in e.top_10_samples)
         assert any(sample.get("class_id") == "C99" for e in orphans for sample in e.top_10_samples)
+
+    def test_surrogate_key_overlap_does_not_infer_wrong_relationship(self, tmp_path):
+        users_path = tmp_path / "users.csv"
+        products_path = tmp_path / "products.csv"
+        orders_path = tmp_path / "orders.csv"
+        pd.DataFrame({"id": [1, 2, 3], "name": ["A", "B", "C"]}).to_csv(users_path, index=False)
+        pd.DataFrame({"id": [1, 2, 3], "sku": ["P1", "P2", "P3"]}).to_csv(products_path, index=False)
+        pd.DataFrame({"order_id": [10, 11, 12], "user_id": [1, 2, 3]}).to_csv(orders_path, index=False)
+
+        findings = validate_schema_multi([str(users_path), str(products_path), str(orders_path)], schema_path=None)
+        keys = {
+            (r.child_table, r.child_column, r.parent_table, r.parent_column)
+            for r in findings.relationships
+        }
+
+        assert ("orders", "user_id", "users", "id") in keys
+        assert ("orders", "user_id", "products", "id") not in keys
+        assert ("users", "id", "products", "id") not in keys
 
     def test_inferred_primary_key_still_reports_duplicate_and_null(self, tmp_path):
         schools_path = tmp_path / "schools.csv"

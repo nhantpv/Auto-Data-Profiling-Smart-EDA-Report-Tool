@@ -368,11 +368,12 @@ function renderSchemaPanel(payload) {
   panel.appendChild(makeTable(
     [
       { label: "Status", key: "status" },
+      { label: "Decision", render: (rel) => rel.decision || "-" },
+      { label: "Bucket", render: (rel) => rel.confidence_bucket || "-" },
       {
         label: "Relationship",
         render: (rel) => `${rel.child_table}.${rel.child_column} -> ${rel.parent_table}.${rel.parent_column}`,
       },
-      { label: "Confidence", render: (rel) => formatDecimal(rel.confidence, 3) },
       { label: "Evidence", render: (rel) => (rel.evidence || []).join("; ") },
     ],
     relationships.slice(0, 10),
