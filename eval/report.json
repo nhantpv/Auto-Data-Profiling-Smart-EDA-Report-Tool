@@ -1,0 +1,149 @@
+{
+  "schema_detection": {
+    "overall_by_error_type": {
+      "ORPHAN_FOREIGN_KEY": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "PK_DUPLICATE": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "PK_NULL": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "TYPE_MISMATCH": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "FK_UNCHECKED": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "precision": 1.0,
+        "recall": 1.0
+      }
+    },
+    "by_dataset": {
+      "sakila": {
+        "tier": "level1",
+        "synthetic": false,
+        "by_error_type": {
+          "ORPHAN_FOREIGN_KEY": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "PK_DUPLICATE": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "PK_NULL": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "TYPE_MISMATCH": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "FK_UNCHECKED": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          }
+        }
+      },
+      "northwind": {
+        "tier": "level1",
+        "synthetic": false,
+        "by_error_type": {
+          "ORPHAN_FOREIGN_KEY": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "PK_DUPLICATE": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "PK_NULL": {
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+            "precision": null,
+            "recall": null
+          },
+          "TYPE_MISMATCH": {
+            "tp": 1,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          },
+          "FK_UNCHECKED": {
+            "tp": 2,
+            "fp": 0,
+            "fn": 0,
+            "precision": 1.0,
+            "recall": 1.0
+          }
+        }
+      }
+    }
+  },
+  "missingness_confusion": {
+    "MCAR": {
+      "MCAR": 4,
+      "MNAR?": 1
+    },
+    "MAR": {
+      "MAR": 5
+    },
+    "MNAR": {
+      "MNAR?": 1,
+      "MAR": 4
+    }
+  },
+  "disposition_audit": {
+    "distribution": {
+      "BLOCK": 5,
+      "PREPROCESS": 2,
+      "REVIEW": 3,
+      "unmapped": 0
+    },
+    "all_mapped": true,
+    "injected_disposition_regression_ok": true,
+    "_note": "Static finding-type -> disposition lookup. This is a COMPLETENESS + REGRESSION gate (every emitted finding is mapped; injected findings carry the mapped disposition), NOT a quality metric \u2014 near-tautological by construction."
+  }
+}

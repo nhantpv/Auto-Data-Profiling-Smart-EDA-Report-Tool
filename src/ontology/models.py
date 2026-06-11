@@ -18,10 +18,19 @@ SEVERITY_ORDER: tuple = (
 
 
 class Provenance(str, Enum):
-    """Nguồn gốc của finding — trục thứ 3 (ARCHITECT v5.4 §3)."""
-    OBSERVED = "OBSERVED"       # Đo trực tiếp từ dữ liệu
-    INFERRED = "INFERRED"       # Máy suy luận (calibrator, compound, etc.)
-    LLM_GUIDED = "LLM_GUIDED"  # LLM chọn/đánh giá (L3b Phase 1, L4)
+    """Nguồn gốc của finding — trục thứ 3 (ARCHITECT v5.4 §3, §9.6)."""
+    OBSERVED = "OBSERVED"                       # Đo trực tiếp từ dữ liệu
+    INFERRED = "INFERRED"                       # Máy suy luận (MAR, FK suy luận, …)
+    INDETERMINATE = "INDETERMINATE"             # Lý thuyết không xác định được
+    DERIVED_CROSS_TABLE = "DERIVED_CROSS_TABLE"  # Kết quả L3b aggregate-before-join
+
+
+class Disposition(str, Enum):
+    """Hành động đề xuất cho một finding (ARCHITECT v5.4 §5.5d)."""
+    BLOCK = "BLOCK"             # Chặn sử dụng dữ liệu
+    PREPROCESS = "PREPROCESS"   # Sửa được bằng tiền xử lý
+    REVIEW = "REVIEW"           # Cần người xem xét
+    SIGNAL = "SIGNAL"           # Tín hiệu thống kê, không phải lỗi
 
 
 class DatasetMeta(BaseModel):
@@ -48,6 +57,8 @@ class ColumnStats(BaseModel):
     n_distinct: Optional[int] = None
     missingness_mechanism: Optional[str] = None
     additional_metrics: Dict[str, Any] = Field(default_factory=dict)
+    effective_severity: Optional[Severity] = None   # roll-up cấp-cột (§9.2, compound reform)
+    confidence: Optional[float] = None              # độ chắc của mechanism label (§9.2)
 
 
 class AnomalyRecord(BaseModel):
@@ -59,6 +70,7 @@ class AnomalyRecord(BaseModel):
     compound_severity: Optional[Severity] = None
     confidence: Optional[float] = None
     provenance: Provenance = Provenance.OBSERVED
+    disposition: Optional[Disposition] = None
     finding_id: Optional[str] = None
     threshold_ref: Optional[str] = None
     affected_count: int
@@ -93,6 +105,7 @@ class IssueDetailRef(BaseModel):
     file: str
     collection: str
     index: int
+    table: Optional[str] = None   # khoá bảng cho bundle đa-bảng (§9.5, P3-nhỏ)
 
 
 class IssueSummary(BaseModel):
@@ -104,6 +117,7 @@ class IssueSummary(BaseModel):
     affected_column: Optional[str] = None
     affected_count: int = 0
     confidence: Optional[float] = None
+    disposition: Optional[Disposition] = None
     rationale: str
     detail_ref: Optional[IssueDetailRef] = None
 
@@ -165,6 +179,8 @@ class RelationshipInfo(BaseModel):
     decision_reasons: List[str] = Field(default_factory=list)
     blocked_reasons: List[str] = Field(default_factory=list)
     evidence_metrics: Dict[str, Any] = Field(default_factory=dict)
+    cardinality: Optional[str] = None   # từ L2c: "1:1" | "1:N" | "N:N" (§9.7)
+    role: Optional[str] = None          # từ L2c: "<child_role>-><parent_role>" (§9.7)
 
 
 class IntegrityError(BaseModel):
@@ -179,6 +195,7 @@ class IntegrityError(BaseModel):
     compound_severity: Optional[Severity] = None
     confidence: Optional[float] = None
     provenance: Provenance = Provenance.OBSERVED
+    disposition: Optional[Disposition] = None
     finding_id: Optional[str] = None
     threshold_ref: Optional[str] = None
     top_10_samples: List[Dict[str, Any]] = Field(default_factory=list)
@@ -300,7 +317,7 @@ class MultiAgentResult(BaseModel):
 # ============================================================
 
 class GraphEdge(BaseModel):
-    """1 edge trong relationship graph — có cardinality."""
+    """1 edge trong relationship graph — có cardinality + fan-out (§5.4 L2c)."""
     child_table: str
     child_column: str
     parent_table: str
@@ -308,6 +325,11 @@ class GraphEdge(BaseModel):
     cardinality: str = "UNKNOWN"   # "1:1" | "1:N" | "N:N" | "UNKNOWN"
     pk_runtime_unique: bool = True
     confidence: float = 1.0
+    role: str = ""                          # "<child_role>-><parent_role>"
+    fan_out: bool = False                   # P1: cạnh N:N
+    join_amplification_ratio: float = 1.0   # expected joined rows / child rows
+    base_row_count: int = 0                 # số dòng child trước join
+    joined_row_count: int = 0               # số dòng dự kiến sau join
 
 
 class GraphResult(BaseModel):
@@ -315,6 +337,7 @@ class GraphResult(BaseModel):
     edges: List[GraphEdge] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     non_unique_pk_tables: List[str] = Field(default_factory=list)
+    table_roles: Dict[str, str] = Field(default_factory=dict)  # fact|dimension|bridge|standalone
 
 
 # ============================================================
@@ -352,3 +375,36 @@ class LlmCorrelationPlan(BaseModel):
     model: str = ""
     temperature: float = 0.0
     seed: int = 42
+    timestamp: str = ""   # ISO timestamp lúc plan được tạo (§9.6)
+
+
+# ============================================================
+# Cross-table correlations artifact (ARCHITECT v5.4 §9.6)
+# ============================================================
+
+class CrossTablePair(BaseModel):
+    """1 cặp trong cross_table_correlations.json (§9.6)."""
+    parent_table: str
+    parent_column: str
+    child_table: str
+    child_column: str
+    aggregate_method: str
+    llm_reasoning: str = ""
+    llm_confidence: str = "medium"       # high|medium|low
+    correlation: Optional[float] = None
+    method: str = "spearman"
+    n_independent: Optional[int] = None  # N = parent rows sau aggregate-before-join
+    join_cardinality: Optional[str] = None
+    unit_of_analysis: str = "parent"
+    provenance: str = Provenance.DERIVED_CROSS_TABLE.value
+    status: str = "OK"                   # OK|TOO_FEW_UNITS|NULL_OVERLAP|VALIDATION_FAILED
+    skip_reason: Optional[str] = None    # chi tiết khi status != OK (mở rộng có ghi chú)
+
+
+class CrossTableCorrelationsArtifact(BaseModel):
+    """Hợp đồng §9.6 — cross_table_correlations.json."""
+    schema_version: str = "cross_table_correlations_v1"
+    llm_plan: Dict[str, Any] = Field(default_factory=dict)  # {model, temperature, seed, timestamp}
+    pairs: List[CrossTablePair] = Field(default_factory=list)
+    skipped_by_llm: List[Dict[str, Any]] = Field(default_factory=list)
+    skipped_by_validation: List[Dict[str, Any]] = Field(default_factory=list)

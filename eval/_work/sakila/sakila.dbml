@@ -1,0 +1,159 @@
+Table "actor" {
+  "actor_id" integer [pk]
+  "first_name" varchar [not null]
+  "last_name" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "address" {
+  "address_id" integer [pk]
+  "address" varchar [not null]
+  "address2" float
+  "district" varchar [not null]
+  "city_id" integer [not null]
+  "postal_code" float
+  "phone" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "category" {
+  "category_id" integer [pk]
+  "name" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "city" {
+  "city_id" integer [pk]
+  "city" varchar [not null]
+  "country_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Table "country" {
+  "country_id" integer [pk]
+  "country" varchar [not null]
+  "last_update" varchar
+}
+
+Table "customer" {
+  "customer_id" integer [pk]
+  "store_id" integer [not null]
+  "first_name" varchar [not null]
+  "last_name" varchar [not null]
+  "email" varchar
+  "address_id" integer [not null]
+  "active" integer [not null]
+  "create_date" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "film" {
+  "film_id" integer [pk]
+  "title" varchar [not null]
+  "description" varchar
+  "release_year" integer
+  "language_id" integer [not null]
+  "original_language_id" float
+  "rental_duration" integer [not null]
+  "rental_rate" float [not null]
+  "length" integer
+  "replacement_cost" float [not null]
+  "rating" varchar
+  "special_features" varchar
+  "last_update" varchar [not null]
+}
+
+Table "film_actor" {
+  "actor_id" integer [not null]
+  "film_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Table "film_category" {
+  "film_id" integer [not null]
+  "category_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Table "film_text" {
+  "film_id" varchar [pk]
+  "title" varchar [not null]
+  "description" varchar
+}
+
+Table "inventory" {
+  "inventory_id" integer [pk]
+  "film_id" integer [not null]
+  "store_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Table "language" {
+  "language_id" integer [pk]
+  "name" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "payment" {
+  "payment_id" integer [pk]
+  "customer_id" integer [not null]
+  "staff_id" integer [not null]
+  "rental_id" float
+  "amount" float [not null]
+  "payment_date" varchar [not null]
+  "last_update" varchar [not null]
+}
+
+Table "rental" {
+  "rental_id" integer [pk]
+  "rental_date" varchar [not null]
+  "inventory_id" integer [not null]
+  "customer_id" integer [not null]
+  "return_date" varchar
+  "staff_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Table "staff" {
+  "staff_id" integer [pk]
+  "first_name" varchar [not null]
+  "last_name" varchar [not null]
+  "address_id" integer [not null]
+  "picture" float
+  "email" varchar
+  "store_id" integer [not null]
+  "active" integer [not null]
+  "username" varchar [not null]
+  "password" varchar
+  "last_update" varchar [not null]
+}
+
+Table "store" {
+  "store_id" integer [pk]
+  "manager_staff_id" integer [not null]
+  "address_id" integer [not null]
+  "last_update" varchar [not null]
+}
+
+Ref: "address"."city_id" > "city"."city_id"
+Ref: "city"."country_id" > "country"."country_id"
+Ref: "customer"."store_id" > "store"."store_id"
+Ref: "customer"."address_id" > "address"."address_id"
+Ref: "film"."language_id" > "language"."language_id"
+Ref: "film"."original_language_id" > "language"."language_id"
+Ref: "film_actor"."actor_id" > "actor"."actor_id"
+Ref: "film_actor"."film_id" > "film"."film_id"
+Ref: "film_category"."film_id" > "film"."film_id"
+Ref: "film_category"."category_id" > "category"."category_id"
+Ref: "inventory"."store_id" > "store"."store_id"
+Ref: "inventory"."film_id" > "film"."film_id"
+Ref: "payment"."rental_id" > "rental"."rental_id"
+Ref: "payment"."customer_id" > "customer"."customer_id"
+Ref: "payment"."staff_id" > "staff"."staff_id"
+Ref: "rental"."staff_id" > "staff"."staff_id"
+Ref: "rental"."inventory_id" > "inventory"."inventory_id"
+Ref: "rental"."customer_id" > "customer"."customer_id"
+Ref: "staff"."store_id" > "store"."store_id"
+Ref: "staff"."address_id" > "address"."address_id"
+Ref: "store"."manager_staff_id" > "staff"."staff_id"
+Ref: "store"."address_id" > "address"."address_id"

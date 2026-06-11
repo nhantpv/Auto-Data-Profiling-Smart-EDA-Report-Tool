@@ -199,3 +199,85 @@ class TestSchemaContextModels:
         restored = SchemaEvaluationFindings.model_validate_json(schema.model_dump_json())
         assert restored.relationships[0].relationship_type == "inferred_fk"
         assert restored.relationships[0].status == "missing_from_schema"
+
+
+class TestArchitectV54Contract:
+    """New contract fields per ARCHITECT v5.4 (§3, §5.5d, §9.2, §9.5, §9.6, §9.7)."""
+
+    def test_provenance_enum_matches_architecture(self):
+        from ontology.models import Provenance
+
+        values = {p.value for p in Provenance}
+        assert values == {"OBSERVED", "INFERRED", "INDETERMINATE", "DERIVED_CROSS_TABLE"}
+
+    def test_disposition_enum_and_fields(self):
+        from ontology.models import Disposition, IntegrityError, IssueSummary, Severity
+
+        assert {d.value for d in Disposition} == {"BLOCK", "PREPROCESS", "REVIEW", "SIGNAL"}
+        record = AnomalyRecord(
+            issue_type="MISSINGNESS", description="x", severity=Severity.WARN,
+            affected_count=1, affected_percent=0.1, top_10_samples=[],
+        )
+        assert record.disposition is None
+        error = IntegrityError(
+            error_type="ORPHAN_FOREIGN_KEY", description="x",
+            severity=Severity.CRITICAL, affected_table="orders",
+        )
+        assert error.disposition is None
+        summary = IssueSummary(
+            source="dq", issue_type="MISSINGNESS", effective_severity=Severity.WARN,
+            severity=Severity.WARN, rationale="x",
+        )
+        assert summary.disposition is None
+
+    def test_column_stats_effective_severity_and_confidence(self):
+        col = ColumnStats(type="Numeric", n_missing=0, p_missing=0.0)
+        assert col.effective_severity is None
+        assert col.confidence is None
+
+    def test_issue_detail_ref_table_key(self):
+        from ontology.models import IssueDetailRef
+
+        ref = IssueDetailRef(file="f.json", collection="anomalies", index=0)
+        assert ref.table is None
+
+    def test_relationship_cardinality_and_role(self):
+        from ontology.models import RelationshipInfo
+
+        rel = RelationshipInfo(
+            child_table="orders", child_column="user_id", parent_table="users",
+            parent_column="id", relationship_type="fk", status="ok", confidence=1.0,
+        )
+        assert rel.cardinality is None
+        assert rel.role is None
+
+    def test_graph_edge_fanout_fields_and_table_roles(self):
+        from ontology.models import GraphEdge, GraphResult
+
+        edge = GraphEdge(
+            child_table="orders", child_column="user_id",
+            parent_table="users", parent_column="id",
+        )
+        assert edge.fan_out is False
+        assert edge.join_amplification_ratio == 1.0
+        assert edge.role == ""
+        assert GraphResult().table_roles == {}
+
+    def test_cross_table_pair_contract(self):
+        from ontology.models import CrossTableCorrelationsArtifact, CrossTablePair
+
+        pair = CrossTablePair(
+            parent_table="users", parent_column="age",
+            child_table="orders", child_column="amount", aggregate_method="mean",
+        )
+        assert pair.status == "OK"
+        assert pair.unit_of_analysis == "parent"
+        assert pair.provenance == "DERIVED_CROSS_TABLE"
+        artifact = CrossTableCorrelationsArtifact()
+        assert artifact.schema_version == "cross_table_correlations_v1"
+        assert artifact.pairs == []
+
+    def test_llm_plan_timestamp(self):
+        from ontology.models import LlmCorrelationPlan
+
+        assert LlmCorrelationPlan().timestamp == ""

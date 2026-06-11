@@ -1,0 +1,140 @@
+Table "categories" {
+  "categoryid" integer [pk]
+  "categoryname" varchar
+  "description" varchar
+  "picture" varchar
+}
+
+Table "customercustomerdemo" {
+  "customerid" varchar [not null]
+  "customertypeid" varchar [not null]
+}
+
+Table "customerdemographics" {
+  "customertypeid" varchar [pk]
+  "customerdesc" varchar
+}
+
+Table "customers" {
+  "customerid" varchar [pk]
+  "companyname" varchar
+  "contactname" varchar
+  "contacttitle" varchar
+  "address" varchar
+  "city" varchar
+  "region" varchar
+  "postalcode" varchar
+  "country" varchar
+  "phone" varchar
+  "fax" varchar
+}
+
+Table "employeeterritories" {
+  "employeeid" integer [not null]
+  "territoryid" integer [not null]
+}
+
+Table "employees" {
+  "employeeid" integer [pk]
+  "lastname" varchar
+  "firstname" varchar
+  "title" varchar
+  "titleofcourtesy" varchar
+  "birthdate" varchar
+  "hiredate" varchar
+  "address" varchar
+  "city" varchar
+  "region" varchar
+  "postalcode" varchar
+  "country" varchar
+  "homephone" varchar
+  "extension" integer
+  "photo" varchar
+  "notes" varchar
+  "reportsto" float
+  "photopath" varchar
+}
+
+Table "order details" {
+  "orderid" integer [not null]
+  "productid" integer [not null]
+  "unitprice" float [not null]
+  "quantity" integer [not null]
+  "discount" float [not null]
+}
+
+Table "orders" {
+  "orderid" integer [pk]
+  "customerid" varchar
+  "employeeid" integer
+  "orderdate" varchar
+  "requireddate" varchar
+  "shippeddate" varchar
+  "shipvia" integer
+  "freight" float
+  "shipname" varchar
+  "shipaddress" varchar
+  "shipcity" varchar
+  "shipregion" varchar
+  "shippostalcode" varchar
+  "shipcountry" varchar
+}
+
+Table "products" {
+  "productid" integer [pk]
+  "productname" varchar [not null]
+  "supplierid" integer
+  "categoryid" integer
+  "quantityperunit" varchar
+  "unitprice" float
+  "unitsinstock" integer
+  "unitsonorder" integer
+  "reorderlevel" integer
+  "discontinued" integer [not null]
+}
+
+Table "regions" {
+  "regionid" integer [pk]
+  "regiondescription" varchar [not null]
+}
+
+Table "shippers" {
+  "shipperid" integer [pk]
+  "companyname" varchar [not null]
+  "phone" varchar
+}
+
+Table "suppliers" {
+  "supplierid" integer [pk]
+  "companyname" varchar [not null]
+  "contactname" varchar
+  "contacttitle" varchar
+  "address" varchar
+  "city" varchar
+  "region" varchar
+  "postalcode" varchar
+  "country" varchar
+  "phone" varchar
+  "fax" varchar
+  "homepage" varchar
+}
+
+Table "territories" {
+  "territoryid" integer [pk]
+  "territorydescription" varchar [not null]
+  "regionid" integer [not null]
+}
+
+Ref: "customercustomerdemo"."customertypeid" > "customerdemographics"."customertypeid"
+Ref: "customercustomerdemo"."customerid" > "customers"."customerid"
+Ref: "employeeterritories"."territoryid" > "territories"."territoryid"
+Ref: "employeeterritories"."employeeid" > "employees"."employeeid"
+Ref: "employees"."reportsto" > "employees"."employeeid"
+Ref: "order details"."productid" > "products"."productid"
+Ref: "order details"."orderid" > "orders"."orderid"
+Ref: "orders"."shipvia" > "shippers"."shipperid"
+Ref: "orders"."customerid" > "customers"."customerid"
+Ref: "orders"."employeeid" > "employees"."employeeid"
+Ref: "products"."supplierid" > "suppliers"."supplierid"
+Ref: "products"."categoryid" > "categories"."categoryid"
+Ref: "territories"."regionid" > "regions"."regionid"

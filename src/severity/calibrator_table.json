@@ -1,0 +1,15 @@
+{
+  "completeness": {
+    "metric": "p_missing",
+    "thresholds": [
+      {"max": 0.05, "severity": "INFO"},
+      {"max": 0.20, "severity": "WARN"},
+      {"max": 0.50, "severity": "HIGH"},
+      {"max": 1.01, "severity": "CRITICAL"}
+    ],
+    "dq_dimension": "Completeness"
+  },
+  "constant_column": {"rule": "n_distinct <= 1", "severity": "HIGH", "dq_dimension": "Uniqueness"},
+  "high_cardinality": {"rule": "categorical and p_distinct > 0.9", "severity": "WARN", "dq_dimension": "Uniqueness"},
+  "severe_imbalance": {"rule": "categorical and imbalance > 0.95", "severity": "WARN", "dq_dimension": "Consistency"}
+}
