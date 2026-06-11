@@ -16,6 +16,7 @@ from ontology.models import (
     SchemaMeta,
     TableInfo,
 )
+from ontology.finding_registry import FindingRegistry
 
 logger = logging.getLogger(__name__)
 _POLICY_PATH = Path(__file__).parent.parent.parent / "config" / "schema_inference_policy.json"
@@ -174,6 +175,11 @@ def _err(
         missing_field_context=missing_field_context,
         relationship=relationship,
     )
+
+
+def _register_integrity_errors(errors: list[IntegrityError]) -> list[IntegrityError]:
+    registry = FindingRegistry()
+    return registry.register_integrity_errors(errors)
 
 
 _GENERIC_TOKENS = set(_SCHEMA_POLICY["generic_tokens"])
@@ -986,7 +992,7 @@ def validate_schema_multi(data_paths: list, schema_path: str | None = None) -> S
     return SchemaEvaluationFindings(
         schema_meta=meta,
         tables=table_infos,
-        integrity_errors=errors,
+        integrity_errors=_register_integrity_errors(errors),
         relationships=relationships,
     )
 
@@ -1012,6 +1018,6 @@ def build_schema_findings(df: pd.DataFrame, data_path: str, schema_path: str) ->
     return SchemaEvaluationFindings(
         schema_meta=meta,
         tables=table_infos,
-        integrity_errors=errors,
+        integrity_errors=_register_integrity_errors(errors),
         relationships=_explicit_relationships(schema["refs"]),
     )

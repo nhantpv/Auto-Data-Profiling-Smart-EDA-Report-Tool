@@ -193,6 +193,17 @@ class SchemaEvaluationFindings(BaseModel):
     relationships: List[RelationshipInfo] = Field(default_factory=list)
 
 
+class SchemaGateResult(BaseModel):
+    """Output L2b.5 Human-in-the-loop gate."""
+    schema_version: str = "schema_gate_v1"
+    mode: str = "quick"
+    schema_status: str = "inferred"
+    fact_table: Optional[str] = None
+    relationships: List[RelationshipInfo] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    source: str = "auto"
+
+
 class SafeJoinStep(BaseModel):
     child_table: str
     child_column: str
@@ -225,12 +236,14 @@ class CrossTableAnalysis(BaseModel):
     schema_version: str = "cross_table_analysis_v1"
     status: str
     fact_table: Optional[str] = None
+    llm_plan: Optional["LlmCorrelationPlan"] = None
     denormalized_rows: int = 0
     denormalized_columns: int = 0
     analysis_rows: int = 0
     exact_duplicate_rows_removed: int = 0
     join_steps: List[SafeJoinStep] = Field(default_factory=list)
     correlations: List[CrossTableCorrelation] = Field(default_factory=list)
+    planned_correlations: List[CrossTableCorrelation] = Field(default_factory=list)
     excluded_columns: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     preview_csv_path: Optional[str] = None

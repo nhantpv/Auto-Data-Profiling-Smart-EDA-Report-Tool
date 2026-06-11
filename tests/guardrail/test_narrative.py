@@ -50,6 +50,13 @@ def test_guardrail_rejects_hallucinated_backticked_reference():
     assert report.violations[0].value == "customer_id"
 
 
+def test_guardrail_rejects_causal_language():
+    report = validate_narrative("Column `data.csv` causes the issue.", _findings(), _verdict())
+
+    assert report.status == "failed"
+    assert any(v.check == "causation_language_ban" for v in report.violations)
+
+
 def test_generated_l4_report_passes_guardrail(monkeypatch):
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
 

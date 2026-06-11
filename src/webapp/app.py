@@ -27,9 +27,12 @@ EXAMPLES_MANIFEST = EXAMPLES_DIR / "manifest.json"
 
 ALLOWED_DATA_SUFFIXES = {".csv", ".xlsx", ".xls", ".parquet", ".json", ".jsonl", ".ndjson"}
 ALLOWED_SCHEMA_SUFFIXES = {".dbml", ".sql"}
+ALLOWED_CONFIRMATION_SUFFIXES = {".json"}
 KNOWN_OUTPUTS = {
     "data_quality_findings.json",
     "schema_evaluation_findings.json",
+    "schema_gate.json",
+    "relationship_graph.json",
     "cross_table_analysis.json",
     "dataset_verdict.json",
     "summary_report.md",
@@ -148,6 +151,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "dataset_verdict": _read_json(output_dir / "dataset_verdict.json"),
         "data_quality_findings": _read_json(output_dir / "data_quality_findings.json"),
         "schema_evaluation_findings": _read_json(output_dir / "schema_evaluation_findings.json"),
+        "schema_gate": _read_json(output_dir / "schema_gate.json"),
         "cross_table_analysis": _read_json(output_dir / "cross_table_analysis.json"),
         "guardrail_report": _read_json(output_dir / "guardrail_report.json"),
         "artifact_manifest": _read_json(output_dir / "artifact_manifest.json"),
@@ -168,6 +172,14 @@ def _submit_pipeline_job(job_id: str, mode: str, spec: dict) -> dict:
                 profiling_minimal=bool(spec.get("profiling_minimal", False)),
             )
         if mode == "multi":
+            if spec.get("confirmed_schema_path") or spec.get("fact_table"):
+                return run_pipeline.run_multi(
+                    spec["data_paths"],
+                    spec["output_dir"],
+                    spec.get("schema_path"),
+                    spec.get("confirmed_schema_path"),
+                    spec.get("fact_table"),
+                )
             return run_pipeline.run_multi(
                 spec["data_paths"],
                 spec["output_dir"],
@@ -308,6 +320,8 @@ def run_single_job(
 def run_multi_job(
     data_files: Annotated[list[UploadFile], File(...)],
     schema_file: Annotated[UploadFile | None, File()] = None,
+    confirmed_schema_file: Annotated[UploadFile | None, File()] = None,
+    fact_table: Annotated[str | None, Form()] = None,
 ) -> JSONResponse:
     if len(data_files) < 2:
         raise HTTPException(status_code=400, detail="Multi-table mode requires at least two data files.")
@@ -320,10 +334,15 @@ def run_multi_job(
         schema_path = None
         if schema_file is not None and schema_file.filename:
             schema_path = _save_upload(schema_file, upload_dir, ALLOWED_SCHEMA_SUFFIXES)
+        confirmed_schema_path = None
+        if confirmed_schema_file is not None and confirmed_schema_file.filename:
+            confirmed_schema_path = _save_upload(confirmed_schema_file, upload_dir, ALLOWED_CONFIRMATION_SUFFIXES)
 
         spec = {
             "data_paths": [str(path) for path in data_paths],
             "schema_path": str(schema_path) if schema_path else None,
+            "confirmed_schema_path": str(confirmed_schema_path) if confirmed_schema_path else None,
+            "fact_table": fact_table or None,
             "output_dir": str(output_dir),
         }
         _submit_pipeline_job(job_id, "multi", spec)

@@ -20,6 +20,7 @@ from engines.anomaly_engine import run_anomaly_detection
 from engines.visualizer import attach_diagnostic_charts
 from engines.cross_table_engine import run_cross_table_analysis
 from engines.graph_engine import reconstruct_graph
+from engines.schema_gate import apply_schema_gate
 from engines.schema_engine import (
     build_schema_findings, load_tables, load_tables_by_path, validate_schema_multi,
 )
@@ -63,6 +64,8 @@ def _artifact_kind(path: Path) -> str:
         return "cross_table_analysis_json"
     if path.name == "relationship_graph.json":
         return "relationship_graph_json"
+    if path.name == "schema_gate.json":
+        return "schema_gate_json"
     if path.name.endswith("_findings.json"):
         return "findings_json"
     if path.name == "dataset_verdict.json":
@@ -93,6 +96,8 @@ def _artifact_source_layer(path: Path) -> str:
         return "L4_CROSS_TABLE"
     if path.name == "relationship_graph.json":
         return "L2C_GRAPH"
+    if path.name == "schema_gate.json":
+        return "L2B5_SCHEMA_GATE"
     if path.name == "cross_table_dataset_preview.csv":
         return "L4_CROSS_TABLE"
     if path.name in {"summary_report.md", "l4_report.md"}:
@@ -337,7 +342,13 @@ def run(
     return output_paths
 
 
-def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None = None) -> dict:
+def run_multi(
+    data_paths: list,
+    out_dir: str = "output",
+    schema_path: str | None = None,
+    confirmed_schema_path: str | None = None,
+    fact_table: str | None = None,
+) -> dict:
     """Multi-table mode: N data files + optional schema -> schema findings + verdict.
     When schema_path is omitted, table schemas and relationships are inferred from data.
     Data-quality profiling is run per table and summarized across all loaded tables.
@@ -390,11 +401,19 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     verdict = aggregate(meta, dq_findings=combined_findings.anomalies, integrity_errors=schema.integrity_errors)
 
     cross_tables = _load_tables_for_cross_analysis(data_paths, schema_path)
-    graph_result = reconstruct_graph(cross_tables, schema)
-    cross_table_analysis = run_cross_table_analysis(cross_tables, schema.relationships, out)
+    schema_gate = apply_schema_gate(schema, cross_tables, confirmed_schema_path, fact_table)
+    gated_schema = schema.model_copy(update={"relationships": schema_gate.relationships})
+    graph_result = reconstruct_graph(cross_tables, gated_schema)
+    cross_table_analysis = run_cross_table_analysis(
+        cross_tables,
+        schema_gate.relationships,
+        out,
+        fact_table=schema_gate.fact_table,
+    )
 
     dq_path = out / "data_quality_findings.json"
     schema_out = out / "schema_evaluation_findings.json"
+    schema_gate_path = out / "schema_gate.json"
     graph_path = out / "relationship_graph.json"
     cross_table_path = out / "cross_table_analysis.json"
     verdict_path = out / "dataset_verdict.json"
@@ -424,6 +443,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
         encoding="utf-8",
     )
     schema_out.write_text(schema.model_dump_json(indent=2), encoding="utf-8")
+    schema_gate_path.write_text(schema_gate.model_dump_json(indent=2), encoding="utf-8")
     graph_path.write_text(graph_result.model_dump_json(indent=2), encoding="utf-8")
     cross_table_path.write_text(cross_table_analysis.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
@@ -435,6 +455,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
 
     print(f"data_quality_findings.json       → {dq_path}")
     print(f"schema_evaluation_findings.json → {schema_out}")
+    print(f"schema_gate.json                → {schema_gate_path}")
     print(f"relationship_graph.json         → {graph_path}")
     print(f"cross_table_analysis.json       → {cross_table_path}")
     print(f"dataset_verdict.json            → {verdict_path}")
@@ -446,6 +467,7 @@ def run_multi(data_paths: list, out_dir: str = "output", schema_path: str | None
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),
+        "schema_gate_path": str(schema_gate_path),
         "graph_path": str(graph_path),
         "cross_table_path": str(cross_table_path),
         "verdict_path": str(verdict_path),
@@ -461,7 +483,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python run_pipeline.py <data_path> [out_dir] [schema.dbml|schema.sql]")
         print("       Supported data: .csv, .xlsx, .xls, .parquet, .json, .jsonl, .ndjson")
-        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--out <dir>]")
+        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--confirmed-schema <file.json>] [--fact-table <table>] [--out <dir>]")
         sys.exit(1)
 
     if sys.argv[1] == "--multi":
@@ -476,11 +498,21 @@ if __name__ == "__main__":
             schema_idx = args.index("--schema")
             schema_arg = args[schema_idx + 1]
             del args[schema_idx:schema_idx + 2]
+        confirmed_schema_arg = None
+        if "--confirmed-schema" in args:
+            confirmed_idx = args.index("--confirmed-schema")
+            confirmed_schema_arg = args[confirmed_idx + 1]
+            del args[confirmed_idx:confirmed_idx + 2]
+        fact_table_arg = None
+        if "--fact-table" in args:
+            fact_idx = args.index("--fact-table")
+            fact_table_arg = args[fact_idx + 1]
+            del args[fact_idx:fact_idx + 2]
         data_args = args
         if len(data_args) < 2:
             print("Error: --multi mode requires at least two data files")
             sys.exit(1)
-        run_multi(data_args, out_arg, schema_arg)
+        run_multi(data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg)
     else:
         data_arg = sys.argv[1]
         out_arg = sys.argv[2] if len(sys.argv) > 2 else "output"

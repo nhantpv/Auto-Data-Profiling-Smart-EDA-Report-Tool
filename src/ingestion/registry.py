@@ -3,7 +3,7 @@ from typing import List
 import pandas as pd
 from ingestion.base import DataReader
 from ingestion.readers import CSVReader, ExcelReader, JSONReader, ParquetReader
-from ingestion.sampling import sample_if_large
+from ingestion.sampling import attach_full_data_metadata
 
 _READERS: List[DataReader] = [CSVReader(), ExcelReader(), ParquetReader(), JSONReader()]
 
@@ -21,4 +21,4 @@ def load_any(path: str, sample_threshold: int = 500_000, seed: int = 42) -> pd.D
     if not Path(path).exists():
         raise FileNotFoundError(f"File not found: {path}")
     df = _pick_reader(path).read(path)
-    return sample_if_large(df, sample_threshold, seed)
+    return attach_full_data_metadata(df)

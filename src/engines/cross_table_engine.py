@@ -485,6 +485,27 @@ async def llm_plan_correlations(
     return validate_llm_plan(raw_plan, tables_meta, relationships)
 
 
+def _llm_plan_correlations_sync(
+    tables: dict[str, pd.DataFrame],
+    relationships: list[RelationshipInfo],
+) -> LlmCorrelationPlan:
+    if os.getenv("SMART_EDA_L3B_PROVIDER", "deterministic").strip().lower() != "openai":
+        return LlmCorrelationPlan(
+            correlation_pairs=[],
+            skipped_pairs=[{"reason": "SMART_EDA_L3B_PROVIDER is not openai"}],
+            model="deterministic",
+        )
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(llm_plan_correlations(tables, relationships))
+    return LlmCorrelationPlan(
+        correlation_pairs=[],
+        skipped_pairs=[{"reason": "planner_skipped_inside_running_event_loop"}],
+        model="deterministic",
+    )
+
+
 def compute_planned_correlations(
     tables: dict[str, pd.DataFrame],
     plan: LlmCorrelationPlan,
@@ -538,11 +559,24 @@ def run_cross_table_analysis(
     relationships: list[RelationshipInfo],
     out_dir: str | Path | None = None,
     preview_limit: int = 1000,
+    fact_table: str | None = None,
 ) -> CrossTableAnalysis:
     warnings: list[str] = []
-    fact_table = choose_fact_table(tables, relationships)
+    llm_plan = _llm_plan_correlations_sync(tables, relationships)
+    planned_correlations = compute_planned_correlations(tables, llm_plan)
+    if llm_plan.skipped_pairs:
+        warnings.append(f"L3b planner skipped {len(llm_plan.skipped_pairs)} pair(s).")
+    if planned_correlations:
+        warnings.append(f"L3b planner produced {len(planned_correlations)} validated correlation(s).")
+
+    fact_table = fact_table if fact_table in tables else choose_fact_table(tables, relationships)
     if fact_table is None:
-        return CrossTableAnalysis(status="skipped_no_tables", warnings=["No tables were loaded."])
+        return CrossTableAnalysis(
+            status="skipped_no_tables",
+            llm_plan=llm_plan,
+            planned_correlations=planned_correlations,
+            warnings=[*warnings, "No tables were loaded."],
+        )
 
     direct_relationships = [
         rel for rel in relationships
@@ -555,10 +589,12 @@ def run_cross_table_analysis(
         return CrossTableAnalysis(
             status="skipped_no_direct_relationships",
             fact_table=fact_table,
+            llm_plan=llm_plan,
             denormalized_rows=len(tables[fact_table]),
             denormalized_columns=len(tables[fact_table].columns),
             analysis_rows=len(tables[fact_table]),
-            warnings=[f"Fact table '{fact_table}' has no direct relationships to join."],
+            planned_correlations=planned_correlations,
+            warnings=[*warnings, f"Fact table '{fact_table}' has no direct relationships to join."],
         )
 
     denormalized = _prefix_frame(tables[fact_table].copy(), fact_table)
@@ -590,12 +626,14 @@ def run_cross_table_analysis(
     return CrossTableAnalysis(
         status="completed",
         fact_table=fact_table,
+        llm_plan=llm_plan,
         denormalized_rows=len(denormalized),
         denormalized_columns=len(denormalized.columns),
         analysis_rows=len(analysis_df),
         exact_duplicate_rows_removed=exact_removed,
         join_steps=join_steps,
         correlations=correlations,
+        planned_correlations=planned_correlations,
         excluded_columns=excluded_columns,
         warnings=warnings,
         preview_csv_path=preview_path,

@@ -213,6 +213,12 @@ def _cross_table_summary(cross_table_analysis: CrossTableAnalysis | None) -> str
         return None
     if cross_table_analysis.status != "completed":
         return f"Cross-table analysis status is {cross_table_analysis.status}."
+    if cross_table_analysis.planned_correlations:
+        top = cross_table_analysis.planned_correlations[0]
+        return (
+            f"L3b validated planned cross-table pair {top.left_feature} vs {top.right_feature}. "
+            "The narrative treats it as association, not causation."
+        )
     if cross_table_analysis.correlations:
         top = cross_table_analysis.correlations[0]
         return (

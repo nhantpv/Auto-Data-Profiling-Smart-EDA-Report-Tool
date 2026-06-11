@@ -65,3 +65,25 @@ def test_duplicate_parent_key_is_collapsed_before_join_to_prevent_fanout(tmp_pat
     assert step.parent_key_unique is False
     assert step.after_rows == step.before_rows == len(orders)
     assert any("collapsed" in warning for warning in step.warnings)
+
+
+def test_fact_table_override_is_used(tmp_path):
+    orders = pd.DataFrame({
+        "order_id": [101, 102, 103],
+        "user_id": [1, 2, 3],
+        "total": [10.0, 20.0, 30.0],
+    })
+    users = pd.DataFrame({
+        "id": [1, 2, 3],
+        "credit_score": [100, 200, 300],
+    })
+
+    analysis = run_cross_table_analysis(
+        {"orders": orders, "users": users},
+        [_rel()],
+        tmp_path,
+        fact_table="orders",
+    )
+
+    assert analysis.fact_table == "orders"
+    assert analysis.llm_plan is not None

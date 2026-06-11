@@ -10,6 +10,10 @@ from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluatio
 
 _NUMERIC_TOKEN = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?(?![A-Za-z0-9_])")
 _BACKTICK_TOKEN = re.compile(r"`([^`]+)`")
+_CAUSATION_LANGUAGE = re.compile(
+    r"\b(causes?|caused by|causing|leads? to|result(?:s|ed)? in|due to)\b",
+    re.IGNORECASE,
+)
 
 
 class GuardrailViolation(BaseModel):
@@ -135,6 +139,13 @@ def _report_for_text(
                 value=reference,
                 detail="Backticked reference is not present in the evidence allowed set.",
             ))
+
+    for match in _CAUSATION_LANGUAGE.finditer(text):
+        violations.append(GuardrailViolation(
+            check="causation_language_ban",
+            value=match.group(0),
+            detail="Narrative must not turn correlation or association into causal language.",
+        ))
 
     return GuardrailReport(
         status="passed" if not violations else "failed",
@@ -324,6 +335,13 @@ def validate_narrative(
                 value=reference,
                 detail="Backticked field/table/issue reference is not present in the evidence set.",
             ))
+
+    for match in _CAUSATION_LANGUAGE.finditer(text):
+        violations.append(GuardrailViolation(
+            check="causation_language_ban",
+            value=match.group(0),
+            detail="Narrative must not turn correlation or association into causal language.",
+        ))
 
     return GuardrailReport(
         status="passed" if not violations else "failed",

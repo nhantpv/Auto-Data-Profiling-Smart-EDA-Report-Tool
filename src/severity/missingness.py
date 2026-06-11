@@ -108,24 +108,12 @@ def sample_missingness_frame(
     max_rows: int = _MAX_MISSINGNESS_ROWS,
     random_state: int = _SAMPLE_RANDOM_STATE,
 ) -> pd.DataFrame:
-    """Cap missingness diagnostics to max_rows while preserving missing rows.
+    """Deprecated compatibility helper.
 
-    Large datasets can make logistic CV expensive.  We keep all rows with any
-    missing value when they fit the cap, then fill the remaining budget with a
-    deterministic sample of complete rows.
+    ARCHITECT v5.4 requires full-data missingness diagnostics.  Keep the
+    function for older imports, but return the original frame unchanged.
     """
-    if len(df) <= max_rows:
-        return df
-
-    missing_mask = df.isna().any(axis=1)
-    missing_rows = df.loc[missing_mask]
-    if len(missing_rows) >= max_rows:
-        return missing_rows.sample(n=max_rows, random_state=random_state).sort_index()
-
-    complete_rows = df.loc[~missing_mask]
-    remaining = max_rows - len(missing_rows)
-    sampled_complete = complete_rows.sample(n=remaining, random_state=random_state)
-    return pd.concat([missing_rows, sampled_complete]).sort_index()
+    return df
 
 
 # ── Dataset-level entry point ─────────────────────────────────────────────────

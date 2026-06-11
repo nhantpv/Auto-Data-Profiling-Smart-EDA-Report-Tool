@@ -109,6 +109,7 @@ class TestSchemaIntegration:
         assert "UNIQUE_VIOLATION" in error_types
         assert "MISSING_COLUMN" in error_types
         assert "EXTRA_COLUMN" in error_types
+        assert all(e.finding_id for e in schema.integrity_errors)
 
         # Verdict must be NOT_READY (has CRITICAL from PK_DUPLICATE + MISSING_COLUMN)
         profile = run_profiling(df)
@@ -263,6 +264,8 @@ class TestMultiTableIntegration:
 
         assert Path(result["dq_path"]).exists()
         assert Path(result["schema_path"]).exists()
+        assert Path(result["schema_gate_path"]).exists()
+        assert Path(result["graph_path"]).exists()
         assert Path(result["cross_table_path"]).exists()
         assert Path(result["verdict_path"]).exists()
         assert Path(result["report_path"]).exists()
@@ -282,5 +285,8 @@ class TestMultiTableIntegration:
         assert cross["schema_version"] == "cross_table_analysis_v1"
         assert cross["status"] == "completed"
         assert cross["fact_table"] == "orders"
+        gate = json.loads(Path(result["schema_gate_path"]).read_text())
+        assert gate["schema_version"] == "schema_gate_v1"
+        assert gate["fact_table"] == "orders"
         assert cross["join_steps"][0]["after_rows"] == cross["join_steps"][0]["before_rows"]
         assert Path(cross["preview_csv_path"]).exists()

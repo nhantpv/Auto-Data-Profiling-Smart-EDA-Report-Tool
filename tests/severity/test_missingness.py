@@ -151,7 +151,7 @@ class TestDetectMissingness:
         assert "target" in result
         assert result["target"] == "MAR"
 
-    def test_sampling_caps_large_frame_and_preserves_missing_rows(self):
+    def test_missingness_helper_keeps_full_frame(self):
         df = pd.DataFrame({
             "a": np.arange(20_000, dtype=float),
             "b": np.arange(20_000, dtype=float),
@@ -160,10 +160,10 @@ class TestDetectMissingness:
 
         sampled = sample_missingness_frame(df)
 
-        assert len(sampled) == _MAX_MISSINGNESS_ROWS
+        assert len(sampled) == len(df)
         assert sampled["a"].isna().sum() == 50
 
-    def test_detect_missingness_runs_diagnostics_on_sample(self, monkeypatch):
+    def test_detect_missingness_runs_diagnostics_on_full_frame(self, monkeypatch):
         seen_lengths = []
 
         def fake_mcar(frame):
