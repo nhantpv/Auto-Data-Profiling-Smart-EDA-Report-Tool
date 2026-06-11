@@ -321,13 +321,10 @@ def _columns_for_table(meta: Any) -> set[str]:
 
 
 def _relationship_exists(pair: CorrelationPairPlan, relationships: Iterable[RelationshipInfo]) -> bool:
+    # ARCHITECT §5.7 validation: the JOIN PATH between the two tables must exist
+    # in the schema graph. The pair's own columns are measures, not join keys.
     for rel in relationships:
-        if (
-            rel.parent_table == pair.parent_table
-            and rel.parent_column == pair.parent_column
-            and rel.child_table == pair.child_table
-            and rel.child_column == pair.child_column
-        ):
+        if rel.parent_table == pair.parent_table and rel.child_table == pair.child_table:
             return True
     return False
 
@@ -408,10 +405,13 @@ def _call_openai_plan(prompt: str) -> dict[str, Any]:
         "model": model,
         "instructions": (
             "Return JSON only. Select only statistically meaningful cross-table "
-            "correlation pairs from the deterministic schema evidence. Do not invent tables or columns."
+            "correlation pairs from the deterministic schema evidence. Do not invent tables or columns. "
+            "Never pick PK/FK or identifier columns, never pair columns from the same table, "
+            "and return an empty list when no pair is analytically meaningful."
         ),
         "input": prompt,
         "max_output_tokens": 900,
+        "temperature": 0,
     }
     request = urllib.request.Request(
         "https://api.openai.com/v1/responses",
@@ -451,6 +451,11 @@ async def llm_plan_correlations(
             "tables_meta": {
                 table: sorted(_columns_for_table(meta))
                 for table, meta in tables_meta.items()
+            },
+            "sample_rows": {
+                table: json.loads(meta.head(10).to_json(orient="records", date_format="iso"))
+                for table, meta in tables_meta.items()
+                if isinstance(meta, pd.DataFrame)
             },
             "relationships": [rel.model_dump(mode="json") for rel in relationships],
             "required_shape": {
@@ -506,17 +511,34 @@ def _llm_plan_correlations_sync(
     )
 
 
+_MIN_INDEPENDENT_UNITS = 30   # ARCHITECT §5.7: skip N < 30 (TOO_FEW_UNITS)
+_NULL_OVERLAP_GATE = 0.70     # ARCHITECT §5.7 / P4: skip both-null overlap > 70%
+
+
+def _relationship_for_pair(
+    pair: CorrelationPairPlan,
+    relationships: Iterable[RelationshipInfo],
+) -> RelationshipInfo | None:
+    for rel in relationships:
+        if rel.parent_table == pair.parent_table and rel.child_table == pair.child_table:
+            return rel
+    return None
+
+
 def compute_planned_correlations(
     tables: dict[str, pd.DataFrame],
     plan: LlmCorrelationPlan,
+    relationships: Iterable[RelationshipInfo],
     limit: int = 25,
 ) -> list[CrossTableCorrelation]:
-    """Phase 2: compute validated LLM-selected numeric correlations.
+    """Phase 2: deterministic aggregate-before-join compute (ARCHITECT §5.7).
 
-    MVP implementation is conservative: it computes Pearson only when both
-    selected columns are numeric/parseable and there are at least 3 row-aligned
-    observations. Unsafe joins are left to ``run_cross_table_analysis``.
+    For each validated pair: aggregate the child column to parent grain via
+    the schema-graph FK, join on the relationship key, then correlate on the
+    aggregated frame (Spearman, N = parent rows). Pairs are skipped when
+    N < 30 (TOO_FEW_UNITS) or the both-null overlap exceeds 70% (P4).
     """
+    relationships = list(relationships)
     records: list[CrossTableCorrelation] = []
     for pair in plan.correlation_pairs:
         parent = tables.get(pair.parent_table)
@@ -525,18 +547,41 @@ def compute_planned_correlations(
             continue
         if pair.parent_column not in parent.columns or pair.child_column not in child.columns:
             continue
-        left = pd.to_numeric(parent[pair.parent_column], errors="coerce").reset_index(drop=True)
-        right = pd.to_numeric(child[pair.child_column], errors="coerce").reset_index(drop=True)
-        n = min(len(left), len(right))
-        if n < 3:
+        rel = _relationship_for_pair(pair, relationships)
+        if rel is None:
             continue
+        if rel.child_column not in child.columns or rel.parent_column not in parent.columns:
+            continue
+
+        # 1. Aggregate child measure to parent grain (i.i.d. compliance).
+        child_frame = pd.DataFrame({
+            "key": _normalise_key(child[rel.child_column]),
+            "value": pd.to_numeric(child[pair.child_column], errors="coerce"),
+        }).dropna(subset=["key"])
+        if child_frame.empty:
+            continue
+        aggregated = child_frame.groupby("key")["value"].agg(pair.aggregate_method)
+
+        # 2. Join aggregated child onto the parent table — one row per parent.
         frame = pd.DataFrame({
-            "left": left.iloc[:n],
-            "right": right.iloc[:n],
-        }).dropna()
-        if len(frame) < 3 or frame["left"].nunique() <= 1 or frame["right"].nunique() <= 1:
+            "left": pd.to_numeric(parent[pair.parent_column], errors="coerce"),
+            "right": _normalise_key(parent[rel.parent_column]).map(aggregated),
+        })
+
+        # 3. Gates: both-null overlap (P4) then minimum independent units.
+        if len(frame) == 0:
             continue
-        coefficient = frame["left"].corr(frame["right"], method="pearson")
+        both_null_share = float((frame["left"].isna() & frame["right"].isna()).mean())
+        if both_null_share > _NULL_OVERLAP_GATE:
+            continue
+        frame = frame.dropna()
+        if len(frame) < _MIN_INDEPENDENT_UNITS:
+            continue
+        if frame["left"].nunique() <= 1 or frame["right"].nunique() <= 1:
+            continue
+
+        # 4. Spearman on the aggregated frame.
+        coefficient = frame["left"].corr(frame["right"], method="spearman")
         if pd.isna(coefficient):
             continue
         coefficient = round(float(coefficient), 4)
@@ -545,7 +590,7 @@ def compute_planned_correlations(
             right_feature=f"{pair.child_table}.{pair.child_column}",
             left_table=pair.parent_table,
             right_table=pair.child_table,
-            method=f"pearson_row_aligned_{pair.aggregate_method}",
+            method=f"spearman_agg_{pair.aggregate_method}",
             coefficient=coefficient,
             abs_coefficient=round(abs(coefficient), 4),
             n=int(len(frame)),
@@ -563,7 +608,7 @@ def run_cross_table_analysis(
 ) -> CrossTableAnalysis:
     warnings: list[str] = []
     llm_plan = _llm_plan_correlations_sync(tables, relationships)
-    planned_correlations = compute_planned_correlations(tables, llm_plan)
+    planned_correlations = compute_planned_correlations(tables, llm_plan, relationships)
     if llm_plan.skipped_pairs:
         warnings.append(f"L3b planner skipped {len(llm_plan.skipped_pairs)} pair(s).")
     if planned_correlations:
