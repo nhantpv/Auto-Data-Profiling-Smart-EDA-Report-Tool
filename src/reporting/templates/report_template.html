@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart EDA Report — {file_name}</title>
+  <style>{css_content}</style>
+</head>
+<body>
+  <!-- ===== HEADER: Verdict Banner ===== -->
+  <header>
+    <div class="verdict-banner verdict-{verdict_class}">
+      <span class="verdict-icon">{verdict_icon}</span>
+      <h1>Verdict: {verdict_value}</h1>
+      <p class="verdict-rationale">{verdict_rationale}</p>
+    </div>
+    <div class="dataset-meta">
+      <span class="meta-item">{file_name}</span>
+      <span class="meta-sep">·</span>
+      <span class="meta-item">{n} rows</span>
+      <span class="meta-sep">·</span>
+      <span class="meta-item">{n_var} columns</span>
+      <span class="meta-sep">·</span>
+      <span class="meta-item">Missing: {p_cells_missing}</span>
+    </div>
+  </header>
+
+  <!-- ===== TAB BAR ===== -->
+  <nav class="tab-bar">
+    <button class="tab active" onclick="showTab('ai')">🤖 AI Analysis</button>
+    <button class="tab" onclick="showTab('stats')">📊 Statistical Details</button>
+  </nav>
+
+  <!-- ===== TAB 1: AI ANALYSIS ===== -->
+  <main>
+    <div id="tab-ai" class="tab-content active">
+      {ai_analysis_content}
+    </div>
+
+    <!-- ===== TAB 2: STATISTICAL DETAILS (ydata nguyên bản) ===== -->
+    <div id="tab-stats" class="tab-content" style="display:none">
+      <iframe srcdoc="{ydata_escaped}" class="ydata-frame"></iframe>
+    </div>
+  </main>
+
+  <!-- ===== FOOTER ===== -->
+  <footer>
+    <p>Guardrail: {guardrail_status} · Provider: {provider} · Model: {model_info}</p>
+    <p class="timestamp">Generated: {timestamp}</p>
+  </footer>
+
+  <script>{js_content}</script>
+</body>
+</html>

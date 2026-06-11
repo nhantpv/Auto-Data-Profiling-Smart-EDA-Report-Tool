@@ -1,0 +1,85 @@
+/* Smart EDA Report — Design System
+   Member C: Thiết kế visual cho smart_eda_report.html
+   Placeholder — C sẽ thay thế hoàn toàn nội dung file này.
+*/
+
+/* === Verdict Banner === */
+.verdict-banner {
+  padding: 24px 32px;
+  color: white;
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+.verdict-READY { background: linear-gradient(135deg, #10b981, #059669); }
+.verdict-WARN  { background: linear-gradient(135deg, #f59e0b, #d97706); }
+.verdict-NOT_READY { background: linear-gradient(135deg, #ef4444, #dc2626); }
+
+.verdict-icon { font-size: 2rem; margin-right: 12px; }
+.verdict-rationale { opacity: 0.9; margin-top: 8px; }
+
+/* === Dataset Meta === */
+.dataset-meta {
+  display: flex;
+  gap: 8px;
+  padding: 12px 0;
+  color: #6b7280;
+  font-size: 0.9rem;
+}
+
+/* === Tab System === */
+.tab-bar {
+  display: flex;
+  gap: 0;
+  border-bottom: 2px solid #e5e7eb;
+  margin-bottom: 24px;
+}
+.tab {
+  padding: 12px 24px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-weight: 600;
+  font-size: 1rem;
+  color: #6b7280;
+  transition: all 0.2s;
+}
+.tab:hover { color: #3b82f6; }
+.tab.active {
+  border-bottom: 3px solid #3b82f6;
+  color: #3b82f6;
+}
+
+/* === Content === */
+.tab-content { padding: 0 16px; }
+
+/* === Severity Badges === */
+.severity-CRITICAL { background: #fecaca; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.severity-HIGH { background: #fed7aa; color: #9a3412; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.severity-WARN { background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.severity-INFO { background: #dbeafe; color: #1e40af; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+
+/* === ydata iframe === */
+.ydata-frame {
+  width: 100%;
+  height: calc(100vh - 200px);
+  border: none;
+  border-radius: 8px;
+}
+
+/* === Footer === */
+footer {
+  margin-top: 48px;
+  padding: 16px 0;
+  border-top: 1px solid #e5e7eb;
+  color: #9ca3af;
+  font-size: 0.85rem;
+}
+
+/* === Dark Mode === */
+@media (prefers-color-scheme: dark) {
+  body { background: #111827; color: #f3f4f6; }
+  .tab-bar { border-color: #374151; }
+  .tab { color: #9ca3af; }
+  .tab.active { color: #60a5fa; border-color: #60a5fa; }
+  footer { border-color: #374151; color: #6b7280; }
+}
