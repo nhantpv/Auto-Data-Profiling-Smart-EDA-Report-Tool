@@ -4,7 +4,6 @@ import asyncio
 import html
 import json
 import os
-import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -84,88 +83,6 @@ def _strip_json_fences(text: str) -> str:
     if stripped.endswith("```"):
         stripped = stripped[:-3].strip()
     return stripped
-
-
-def _guardrail_feedback(report: GuardrailReport, output_format: str) -> str:
-    if not report.violations:
-        return ""
-    violations = "\n".join(
-        f"- {violation.check}: {violation.value} ({violation.detail})"
-        for violation in report.violations[:8]
-    )
-    return (
-        "\n\nPrevious attempt failed guardrail validation. Revise the answer and fix "
-        "these exact issues without adding new facts:\n"
-        f"{violations}\n"
-        f"Return {output_format} only."
-    )
-
-
-_CAUSAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\bdue to\b", re.IGNORECASE), "with"),
-    (re.compile(r"\bcaused by\b", re.IGNORECASE), "associated with"),
-    (re.compile(r"\bcauses?\b", re.IGNORECASE), "is associated with"),
-    (re.compile(r"\bcausing\b", re.IGNORECASE), "associated with"),
-    (re.compile(r"\bleads? to\b", re.IGNORECASE), "is associated with"),
-    (re.compile(r"\bresult(?:s|ed)? in\b", re.IGNORECASE), "is associated with"),
-)
-
-
-def _neutralize_causation_language(text: str | None) -> str | None:
-    if text is None:
-        return None
-    repaired = text
-    for pattern, replacement in _CAUSAL_REPLACEMENTS:
-        repaired = pattern.sub(replacement, repaired)
-    return repaired
-
-
-def _repair_editor_output(candidate: EditorOutput) -> EditorOutput:
-    return candidate.model_copy(update={
-        "executive_summary": _neutralize_causation_language(candidate.executive_summary) or "",
-        "verdict_explanation": _neutralize_causation_language(candidate.verdict_explanation) or "",
-        "cross_table_evaluation": _neutralize_causation_language(candidate.cross_table_evaluation),
-        "priority_ranking": _neutralize_causation_language(candidate.priority_ranking) or "",
-    })
-
-
-_EDITOR_STRING_KEYS = (
-    "executive_summary",
-    "verdict_explanation",
-    "cross_table_evaluation",
-    "priority_ranking",
-)
-
-
-def _stringify_editor_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    if isinstance(value, list):
-        parts = [_stringify_editor_value(item) for item in value]
-        return "; ".join(part for part in parts if part)
-    if isinstance(value, dict):
-        parts: list[str] = []
-        for key, item in value.items():
-            text = _stringify_editor_value(item)
-            if text:
-                parts.append(f"{key}: {text}")
-        return "; ".join(parts)
-    return str(value)
-
-
-def _editor_output_from_text(text: str) -> EditorOutput:
-    raw_payload = json.loads(_strip_json_fences(text))
-    if not isinstance(raw_payload, dict):
-        raise ValueError("Editor output must be a JSON object")
-    payload = {
-        key: _stringify_editor_value(raw_payload.get(key))
-        for key in _EDITOR_STRING_KEYS
-    }
-    return EditorOutput.model_validate(payload)
 
 
 def _compact_payload(
@@ -339,22 +256,16 @@ async def _run_analyst(
     if llm_enabled:
         prompt = (
             "Write one concise Markdown section for this issue cluster. "
-            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks. "
-            "Do not use numbered lists, ordinal numbers, or extra counts that are not present in the JSON slice.\n\n"
+            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
-        feedback = ""
         for attempt in range(1, 4):
             try:
                 markdown = await _call_openai_async(
-                    f"{prompt}{feedback}",
+                    prompt,
                     (
                         "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
-                        "Do not invent numbers, thresholds, columns, tables, or recommendations. "
-                        "Write a heading plus short bullets; bullets must not start with numbers. "
-                        "Use table.column references only when that exact relationship exists in evidence. "
-                        "Do not use causal language such as causes, caused by, causing, leads to, "
-                        "results in, or due to."
+                        "Do not invent numbers, thresholds, columns, tables, or recommendations."
                     ),
                     "SMART_EDA_L4_ANALYST_MODEL",
                     "gpt-4o-mini",
@@ -385,14 +296,10 @@ async def _run_analyst(
                     cluster=cluster.issue_type,
                 )
             if llm_errors is not None:
-                violation_checks = ",".join(
-                    f"{violation.check}:{violation.value}"
-                    for violation in report.violations
-                )
+                violation_checks = ",".join(violation.check for violation in report.violations)
                 llm_errors.append(
                     f"analyst:{cluster.issue_type}:attempt_{attempt}: guardrail_failed:{violation_checks}"
                 )
-            feedback = _guardrail_feedback(report, "one Markdown section")
 
     report = verify_analyst_output(
         fallback_markdown,
@@ -461,40 +368,35 @@ async def _run_editor(
             "cross_table_analysis": cross_table_analysis.model_dump(mode="json") if cross_table_analysis else None,
         }
         prompt = (
-            "Write JSON with keys executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking. "
-            "Every value must be a short string, not an object and not an array. "
-            "Use only the provided evidence.\n\n"
+            "Write valid JSON with strictly string values for these keys: "
+            "executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking.\n"
+            "priority_ranking MUST be a string (e.g. a comma-separated list or a text paragraph), NOT an array.\n"
+            "Use only the provided evidence.\n"
+            "For cross_table_evaluation, write a comprehensive narrative explaining the cross-table correlations and their business meaning if they exist. "
+            "If no cross-table analysis is available, return null or a brief statement.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
-        feedback = ""
         for attempt in range(1, 4):
             try:
                 text = await _call_openai_async(
-                    f"{prompt}{feedback}",
+                    prompt,
                     (
                         "You are an EDA Editor agent. Return valid compact JSON only. "
-                        "The JSON values must be strings. Do not return nested objects or arrays. "
-                        "Do not invent numbers, columns, tables, relationships, or thresholds. "
-                        "Do not use causal language such as causes, caused by, causing, leads to, "
-                        "results in, or due to."
+                        "Do not invent numbers, columns, tables, relationships, or thresholds."
                     ),
                     "SMART_EDA_L4_EDITOR_MODEL",
                     "gpt-4o",
                 )
-                candidate = _editor_output_from_text(text)
+                candidate = EditorOutput.model_validate_json(_strip_json_fences(text))
             except Exception as exc:
                 if llm_errors is not None:
                     llm_errors.append(f"editor:attempt_{attempt}: {exc}")
-                feedback = (
-                    "\n\nPrevious attempt failed parsing or request handling. "
-                    "Return valid compact JSON only with keys executive_summary, "
-                    "verdict_explanation, cross_table_evaluation, priority_ranking."
-                )
                 continue
             report = verify_editor_output(
                 candidate.model_dump(mode="json"),
                 [output.markdown for output in analyst_outputs],
                 verdict,
+                cross_table_analysis=cross_table_analysis,
                 provider="openai-editor",
                 used_fallback=False,
             )
@@ -502,32 +404,15 @@ async def _run_editor(
                 candidate.guardrail_passed = True
                 candidate.retry_count = attempt - 1
                 return candidate, _agent_detail("editor", report, attempt - 1)
-            repaired = _repair_editor_output(candidate)
-            if repaired != candidate:
-                repaired_report = verify_editor_output(
-                    repaired.model_dump(mode="json"),
-                    [output.markdown for output in analyst_outputs],
-                    verdict,
-                    provider="openai-editor-repaired",
-                    used_fallback=False,
-                )
-                if repaired_report.status == "passed":
-                    repaired.guardrail_passed = True
-                    repaired.retry_count = attempt - 1
-                    return repaired, _agent_detail("editor", repaired_report, attempt - 1)
-                report = repaired_report
             if llm_errors is not None:
-                violation_checks = ",".join(
-                    f"{violation.check}:{violation.value}"
-                    for violation in report.violations
-                )
+                violation_checks = ",".join(violation.check for violation in report.violations)
                 llm_errors.append(f"editor:attempt_{attempt}: guardrail_failed:{violation_checks}")
-            feedback = _guardrail_feedback(report, "valid compact JSON")
 
     report = verify_editor_output(
         fallback.model_dump(mode="json"),
         [output.markdown for output in analyst_outputs],
         verdict,
+        cross_table_analysis=cross_table_analysis,
         provider="deterministic-editor",
         used_fallback=llm_enabled,
     )
@@ -701,31 +586,30 @@ async def run_multi_agent_l4(
         findings,
         verdict,
         schema,
-        provider="openai-multi-agent" if _llm_enabled() else "deterministic-multi-agent",
-        used_fallback=result.used_fallback,
+        cross_table_analysis,
+        provider="multi-agent",
+        used_fallback=any(a.get("used_fallback", False) for a in agent_details),
     )
     report.llm_errors = llm_errors
     report.agents = agent_details
+    
+    # If the combined narrative still fails the guardrail, do a full fallback
     if report.status != "passed":
-        llm_errors.extend(
-            "final:guardrail_failed:{check}:{value}".format(
-                check=violation.check,
-                value=violation.value,
-            )
-            for violation in report.violations[:12]
-        )
         text = render_deterministic_l4_report(findings, verdict, schema)
         report = validate_narrative(
             text,
             findings,
             verdict,
             schema,
+            cross_table_analysis,
             provider="deterministic-fallback",
             used_fallback=True,
         )
         report.llm_errors = llm_errors
         report.agents = agent_details
         result.used_fallback = True
+    else:
+        result.used_fallback = any(a.get("used_fallback", False) for a in agent_details)
     result.guardrail_report = report.model_dump(mode="json")
     return text, report, result
 
@@ -749,6 +633,7 @@ def _run_multi_agent_sync(
         findings,
         verdict,
         schema,
+        cross_table_analysis,
         provider="deterministic-fallback",
         used_fallback=True,
     )

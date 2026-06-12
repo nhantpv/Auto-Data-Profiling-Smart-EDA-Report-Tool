@@ -732,7 +732,6 @@ def _agent_content(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
     status_panel = _agent_status_panel(result)
     if status_panel:
         sections.append(status_panel)
-
     editor = result.editor_output
     if editor is not None:
         editor_cards = "".join([

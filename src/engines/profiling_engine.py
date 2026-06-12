@@ -41,4 +41,28 @@ def run_profiling_html(df: pd.DataFrame, minimal: bool = False) -> str:
     """
     logger.info("Rendering profiling HTML for DataFrame with %d rows, %d cols.", len(df), len(df.columns))
     profile = ProfileReport(df, minimal=minimal, progress_bar=False, title="Statistical Details")
-    return profile.to_html()
+    html_content = profile.to_html()
+    
+    # Inject script to prevent anchor links from changing the iframe URL.
+    # In some browsers, clicking an anchor link inside a `srcdoc` iframe causes the parent page to load inside the iframe.
+    fix_script = """
+    <script>
+    document.addEventListener("DOMContentLoaded", function() {
+        document.body.addEventListener("click", function(e) {
+            var target = e.target.closest('a[href^="#"]');
+            if (target) {
+                e.preventDefault();
+                var targetId = target.getAttribute("href").substring(1);
+                var targetEl = document.getElementById(targetId) || document.getElementsByName(targetId)[0];
+                if (targetEl) {
+                    targetEl.scrollIntoView();
+                }
+                if (window.jQuery && jQuery(target).tab) {
+                    jQuery(target).tab('show');
+                }
+            }
+        });
+    });
+    </script>
+    """
+    return html_content + fix_script

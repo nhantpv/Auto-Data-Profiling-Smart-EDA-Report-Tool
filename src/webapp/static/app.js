@@ -187,7 +187,13 @@ function verdictSummary(payload) {
   duplicatesEl.textContent = Number.isFinite(Number(meta.n_duplicates))
     ? `${formatInteger(meta.n_duplicates)} (${formatPercent(meta.p_duplicates)})`
     : "-";
-  guardrailEl.textContent = guardrail.status || "-";
+  if (guardrail.used_fallback) {
+    guardrailEl.textContent = "FAILED (Fallback)";
+    guardrailEl.style.color = "#d9534f";
+  } else {
+    guardrailEl.textContent = guardrail.status || "-";
+    guardrailEl.style.color = "";
+  }
 }
 
 function renderSeverityBars(summary = {}) {

@@ -11,7 +11,6 @@ from typing import Annotated
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-
 from config.env_loader import load_project_dotenv
 from webapp.runtime import JobRuntime
 
@@ -104,14 +103,20 @@ def _save_upload(upload: UploadFile, target_dir: Path, allowed_suffixes: set[str
             target = target_dir / f"{stem}_{counter}{suffix}"
             counter += 1
     size = 0
+    exceeds_limit = False
     with target.open("wb") as f:
         while chunk := upload.file.read(1024 * 1024):
             size += len(chunk)
             if size > MAX_UPLOAD_BYTES:
-                target.unlink(missing_ok=True)
-                max_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
-                raise HTTPException(status_code=413, detail=f"Upload exceeds {max_mb} MB per file.")
+                exceeds_limit = True
+                break
             f.write(chunk)
+            
+    if exceeds_limit:
+        target.unlink(missing_ok=True)
+        max_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Upload exceeds {max_mb} MB per file.")
+        
     return target
 
 
@@ -186,11 +191,13 @@ def _submit_pipeline_job(job_id: str, mode: str, spec: dict) -> dict:
                     spec.get("schema_path"),
                     spec.get("confirmed_schema_path"),
                     spec.get("fact_table"),
+                    profiling_minimal=bool(spec.get("profiling_minimal", False)),
                 )
             return run_pipeline.run_multi(
                 spec["data_paths"],
                 spec["output_dir"],
                 spec.get("schema_path"),
+                profiling_minimal=bool(spec.get("profiling_minimal", False)),
             )
         raise RuntimeError(f"Unsupported job mode: {mode}")
 
@@ -329,6 +336,7 @@ def run_multi_job(
     schema_file: Annotated[UploadFile | None, File()] = None,
     confirmed_schema_file: Annotated[UploadFile | None, File()] = None,
     fact_table: Annotated[str | None, Form()] = None,
+    profiling_minimal: Annotated[bool, Form()] = False,
 ) -> JSONResponse:
     if len(data_files) < 2:
         raise HTTPException(status_code=400, detail="Multi-table mode requires at least two data files.")
@@ -351,6 +359,7 @@ def run_multi_job(
             "confirmed_schema_path": str(confirmed_schema_path) if confirmed_schema_path else None,
             "fact_table": fact_table or None,
             "output_dir": str(output_dir),
+            "profiling_minimal": profiling_minimal,
         }
         _submit_pipeline_job(job_id, "multi", spec)
         return JSONResponse(_job_response(job_id, output_dir), status_code=202)

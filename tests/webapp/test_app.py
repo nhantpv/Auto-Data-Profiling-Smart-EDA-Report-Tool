@@ -106,7 +106,7 @@ def test_single_job_upload_returns_outputs(tmp_path, monkeypatch):
 def test_multi_job_with_schema_returns_report(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, profiling_minimal=False):
         assert len(data_paths) == 2
         assert Path(schema_path).suffix == ".dbml"
         _write_outputs(out_dir, include_dq=False, include_schema=True)
@@ -131,7 +131,7 @@ def test_multi_job_with_schema_returns_report(tmp_path, monkeypatch):
 def test_multi_job_without_schema_infers_relationships(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, profiling_minimal=False):
         assert len(data_paths) == 2
         assert schema_path is None
         _write_outputs(out_dir, include_dq=False, include_schema=True)
@@ -155,7 +155,7 @@ def test_multi_job_without_schema_infers_relationships(tmp_path, monkeypatch):
 def test_multi_job_accepts_confirmed_schema_and_fact_table(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None, confirmed_schema_path=None, fact_table=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, confirmed_schema_path=None, fact_table=None, profiling_minimal=False):
         assert len(data_paths) == 2
         assert schema_path is None
         assert Path(confirmed_schema_path).suffix == ".json"
@@ -206,7 +206,7 @@ def test_job_report_endpoint_serves_html(tmp_path, monkeypatch):
 def test_schema_suggestions_and_confirm_endpoints(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, profiling_minimal=False):
         _write_outputs(out_dir, include_dq=False, include_schema=True)
         out = Path(out_dir)
         (out / "schema_gate.json").write_text(
@@ -454,7 +454,7 @@ def test_run_multi_example_dataset(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "EXAMPLES_MANIFEST", examples_dir / "manifest.json")
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, profiling_minimal=False):
         assert [Path(path).name for path in data_paths] == ["users.csv", "orders.csv"]
         assert Path(schema_path).name == "schema.dbml"
         _write_outputs(out_dir, include_dq=False, include_schema=True)
@@ -489,7 +489,7 @@ def test_run_multi_example_without_schema_dataset(tmp_path, monkeypatch):
     monkeypatch.setattr(web_app, "EXAMPLES_MANIFEST", examples_dir / "manifest.json")
     client = _client(tmp_path, monkeypatch)
 
-    def fake_run_multi(data_paths, out_dir, schema_path=None):
+    def fake_run_multi(data_paths, out_dir, schema_path=None, profiling_minimal=False):
         assert [Path(path).name for path in data_paths] == ["users.csv", "orders.csv"]
         assert schema_path is None
         _write_outputs(out_dir, include_dq=False, include_schema=True)

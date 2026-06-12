@@ -4,10 +4,12 @@ import html as html_lib
 import sys
 import warnings
 from pathlib import Path
+from dotenv import load_dotenv
 
 import pandas as pd
 
 warnings.filterwarnings("ignore")
+load_dotenv()
 
 SRC = Path(__file__).parent / "src"
 sys.path.insert(0, str(SRC))
@@ -354,13 +356,13 @@ def run(
     html_report_path.write_text(smart_html, encoding="utf-8")
     artifact_manifest_path = _write_artifact_manifest(out)
 
-    print(f"data_quality_findings.json → {dq_path}")
-    print(f"dataset_verdict.json       → {verdict_path}")
-    print(f"summary_report.md          → {report_path}")
-    print(f"l4_report.md               → {l4_report_path}")
-    print(f"guardrail_report.json      → {guardrail_path}")
-    print(f"smart_eda_report.html      → {html_report_path}")
-    print(f"artifact_manifest.json     → {artifact_manifest_path}")
+    print(f"data_quality_findings.json -> {dq_path}")
+    print(f"dataset_verdict.json       -> {verdict_path}")
+    print(f"summary_report.md          -> {report_path}")
+    print(f"l4_report.md               -> {l4_report_path}")
+    print(f"guardrail_report.json      -> {guardrail_path}")
+    print(f"smart_eda_report.html      -> {html_report_path}")
+    print(f"artifact_manifest.json     -> {artifact_manifest_path}")
     output_paths.update({
         "dq_path": str(dq_path),
         "verdict_path": str(verdict_path),
@@ -379,6 +381,7 @@ def run_multi(
     schema_path: str | None = None,
     confirmed_schema_path: str | None = None,
     fact_table: str | None = None,
+    profiling_minimal: bool = False,
 ) -> dict:
     """Multi-table mode: N data files + optional schema -> schema findings + verdict.
     When schema_path is omitted, table schemas and relationships are inferred from data.
@@ -400,7 +403,7 @@ def run_multi(
             str(path),
             out,
             artifact_prefix=table_name,
-            profiling_minimal=False,
+            profiling_minimal=profiling_minimal,
         )
         table_findings[table_name] = findings
 
@@ -477,7 +480,7 @@ def run_multi(
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
-        _multi_table_ydata_html(cross_tables, minimal=True),
+        _multi_table_ydata_html(cross_tables, minimal=profiling_minimal),
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
     )
@@ -500,17 +503,17 @@ def run_multi(
     html_report_path.write_text(smart_html, encoding="utf-8")
     artifact_manifest_path = _write_artifact_manifest(out)
 
-    print(f"data_quality_findings.json       → {dq_path}")
-    print(f"schema_evaluation_findings.json → {schema_out}")
-    print(f"schema_gate.json                → {schema_gate_path}")
-    print(f"relationship_graph.json         → {graph_path}")
-    print(f"cross_table_analysis.json       → {cross_table_path}")
-    print(f"dataset_verdict.json            → {verdict_path}")
-    print(f"summary_report.md               → {report_path}")
-    print(f"l4_report.md                    → {l4_report_path}")
-    print(f"guardrail_report.json           → {guardrail_path}")
-    print(f"smart_eda_report.html           → {html_report_path}")
-    print(f"artifact_manifest.json          → {artifact_manifest_path}")
+    print(f"data_quality_findings.json       -> {dq_path}")
+    print(f"schema_evaluation_findings.json -> {schema_out}")
+    print(f"schema_gate.json                -> {schema_gate_path}")
+    print(f"relationship_graph.json         -> {graph_path}")
+    print(f"cross_table_analysis.json       -> {cross_table_path}")
+    print(f"dataset_verdict.json            -> {verdict_path}")
+    print(f"summary_report.md               -> {report_path}")
+    print(f"l4_report.md                    -> {l4_report_path}")
+    print(f"guardrail_report.json           -> {guardrail_path}")
+    print(f"smart_eda_report.html           -> {html_report_path}")
+    print(f"artifact_manifest.json          -> {artifact_manifest_path}")
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),
@@ -530,7 +533,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python run_pipeline.py <data_path> [out_dir] [schema.dbml|schema.sql]")
         print("       Supported data: .csv, .xlsx, .xls, .parquet, .json, .jsonl, .ndjson")
-        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--confirmed-schema <file.json>] [--fact-table <table>] [--out <dir>]")
+        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--confirmed-schema <file.json>] [--fact-table <table>] [--out <dir>] [--full]")
         sys.exit(1)
 
     if sys.argv[1] == "--multi":
@@ -555,11 +558,15 @@ if __name__ == "__main__":
             fact_idx = args.index("--fact-table")
             fact_table_arg = args[fact_idx + 1]
             del args[fact_idx:fact_idx + 2]
+        profiling_minimal = True
+        if "--full" in args:
+            profiling_minimal = False
+            args.remove("--full")
         data_args = args
         if len(data_args) < 2:
             print("Error: --multi mode requires at least two data files")
             sys.exit(1)
-        run_multi(data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg)
+        run_multi(data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg, profiling_minimal=profiling_minimal)
     else:
         data_arg = sys.argv[1]
         out_arg = sys.argv[2] if len(sys.argv) > 2 else "output"

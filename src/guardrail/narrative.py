@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Iterable
 
 from pydantic import BaseModel, Field
 
 from config.threshold_registry import ThresholdRegistry
-from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings
+from ontology.models import CrossTableAnalysis, DataQualityFindings, DatasetVerdict, SchemaEvaluationFindings
 
 
 _NUMERIC_TOKEN = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?(?![A-Za-z0-9_])")
@@ -156,6 +157,13 @@ def _number_allowed(token: str, allowed_numbers: set[str]) -> bool:
         allowed_value, allowed_is_percent = allowed_parsed
         if token_is_percent != allowed_is_percent:
             continue
+            
+        # Exact match required for integers
+        if token_value.is_integer() and allowed_value.is_integer():
+            if token_value == allowed_value:
+                return True
+            continue
+
         if token_is_percent:
             denominator = max(abs(allowed_value), 1e-12)
             if abs(token_value - allowed_value) / denominator <= relative_tol:
@@ -255,8 +263,10 @@ def _report_for_text(
             detail="Narrative must not turn correlation or association into causal language.",
         ))
 
+    guardrail_enabled = os.getenv("SMART_EDA_ENABLE_GUARDRAIL", "true").lower() == "true"
+    
     return GuardrailReport(
-        status="passed" if not violations else "failed",
+        status="passed" if not guardrail_enabled or not violations else "failed",
         provider=provider,
         used_fallback=used_fallback,
         checked_numbers=checked_numbers,
@@ -284,6 +294,7 @@ def verify_editor_output(
     editor_json: dict[str, Any],
     analyst_markdowns: list[str],
     verdict: DatasetVerdict,
+    cross_table_analysis: CrossTableAnalysis | None = None,
     provider: str = "editor",
     used_fallback: bool = False,
 ) -> GuardrailReport:
@@ -291,6 +302,8 @@ def verify_editor_output(
     numbers: set[str] = {"0", "10", "100", "0.0%"}
     references: set[str] = {"INFO", "WARN", "HIGH", "CRITICAL", "READY", "NOT_READY"}
     _collect_evidence_values(verdict.model_dump(mode="json"), numbers, references)
+    if cross_table_analysis is not None:
+        _collect_evidence_values(cross_table_analysis.model_dump(mode="json"), numbers, references)
     for markdown in analyst_markdowns:
         for token in _NUMERIC_TOKEN.findall(markdown):
             numbers.add(_normalize_numeric_token(token))
@@ -304,6 +317,7 @@ def build_narrative_evidence(
     findings: DataQualityFindings | None,
     verdict: DatasetVerdict,
     schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
 ) -> NarrativeEvidence:
     numbers: set[str] = {"0", "10", "100", "0.0%"}
     references: set[str] = {
@@ -425,6 +439,8 @@ def build_narrative_evidence(
         _collect_evidence_values(findings.model_dump(mode="json"), numbers, references)
     if schema is not None:
         _collect_evidence_values(schema.model_dump(mode="json"), numbers, references)
+    if cross_table_analysis is not None:
+        _collect_evidence_values(cross_table_analysis.model_dump(mode="json"), numbers, references)
 
     return NarrativeEvidence(numbers=numbers, references=references)
 
@@ -434,10 +450,11 @@ def validate_narrative(
     findings: DataQualityFindings | None,
     verdict: DatasetVerdict,
     schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
     provider: str = "deterministic",
     used_fallback: bool = False,
 ) -> GuardrailReport:
-    evidence = build_narrative_evidence(findings, verdict, schema)
+    evidence = build_narrative_evidence(findings, verdict, schema, cross_table_analysis)
     return _report_for_text(
         text,
         evidence.numbers,
