@@ -12,6 +12,10 @@ warnings.filterwarnings("ignore")
 SRC = Path(__file__).parent / "src"
 sys.path.insert(0, str(SRC))
 
+from config.env_loader import load_project_dotenv
+
+load_project_dotenv(Path(__file__).parent)
+
 from ingestion.registry import load_any
 from ingestion.schema_reader import parse_schema
 from engines.profiling_engine import run_profiling, run_profiling_html

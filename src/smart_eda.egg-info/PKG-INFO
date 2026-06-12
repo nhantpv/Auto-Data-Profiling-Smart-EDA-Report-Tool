@@ -19,6 +19,7 @@ Requires-Dist: setuptools<81,>=68.0
 Requires-Dist: fastapi>=0.115
 Requires-Dist: uvicorn[standard]>=0.30
 Requires-Dist: python-multipart>=0.0.9
+Requires-Dist: python-dotenv>=1.0
 Provides-Extra: dev
 Requires-Dist: pytest>=7.0; extra == "dev"
 Requires-Dist: httpx>=0.27; extra == "dev"

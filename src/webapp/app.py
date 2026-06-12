@@ -12,12 +12,16 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-import run_pipeline
+from config.env_loader import load_project_dotenv
 from webapp.runtime import JobRuntime
 
 
 APP_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = APP_ROOT.parents[1]
+load_project_dotenv(PROJECT_ROOT)
+
+import run_pipeline
+
 STATIC_DIR = APP_ROOT / "static"
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 UPLOAD_DIR = RUNTIME_DIR / "uploads"

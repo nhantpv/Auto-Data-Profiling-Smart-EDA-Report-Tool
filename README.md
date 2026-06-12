@@ -10,6 +10,10 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+For local configuration, copy `.env.example` to `.env`. CLI and FastAPI
+entrypoints load `.env` automatically without overriding exported environment
+variables.
+
 ## Run
 
 Production-style localhost app:
@@ -65,7 +69,9 @@ Production-style local controls:
 - `SMART_EDA_MAX_MULTI_FILES`: maximum uploaded data files in multi-table mode, default `10`.
 - `SMART_EDA_JOB_WORKERS`: background worker count, default `2`.
 - `SMART_EDA_L4_PROVIDER`: `deterministic` by default; set to `openai` to try an LLM narrative.
-- `SMART_EDA_L4_MODEL`: OpenAI model id when `SMART_EDA_L4_PROVIDER=openai`, default `gpt-5`.
+- `SMART_EDA_L4_ANALYST_MODEL`: Analyst model when `SMART_EDA_L4_PROVIDER=openai`, default `gpt-4o-mini`.
+- `SMART_EDA_L4_EDITOR_MODEL`: Editor model when `SMART_EDA_L4_PROVIDER=openai`, default `gpt-4o`.
+- `SMART_EDA_L4_API_MODE`: `chat_completions` by default; `responses` is also supported.
 - `OPENAI_API_KEY`: required only for OpenAI L4 mode.
 
 Outputs include:
