@@ -703,16 +703,12 @@ def _relationship_name_score(child_col: str, parent_col: str, parent_table: str)
 
 
 def _has_required_relationship_semantics(child_col: str, parent_col: str, parent_table: str) -> bool:
-    parent_tokens = set(_identifier_tokens(parent_col))
-    parent_is_generic_identifier = bool(parent_tokens) and parent_tokens <= _GENERIC_TOKENS
-    if not parent_is_generic_identifier:
-        return True
-
     child_concepts = _concept_tokens(child_col)
-    if not child_concepts:
-        return True
-
     parent_concepts = _concept_tokens(parent_col) | _concept_tokens(parent_table)
+    if not parent_concepts:
+        return True
+    if not child_concepts:
+        return False
     return bool(child_concepts & parent_concepts)
 
 

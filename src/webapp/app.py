@@ -141,7 +141,7 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         report_path = output_dir / "summary_report.md"
     files = sorted(
         p.name for p in output_dir.iterdir()
-        if p.is_file() and (p.name in KNOWN_OUTPUTS or p.suffix.lower() in {".csv", ".png"})
+        if p.is_file() and (p.name in KNOWN_OUTPUTS or p.suffix.lower() in {".csv", ".png", ".html"})
     )
     raw_error = meta.get("error")
     public_error = None
@@ -501,7 +501,7 @@ def retry_job(job_id: str) -> JSONResponse:
 def get_job_file(job_id: str, file_name: str):
     job_id = _validate_job_id(job_id)
     path = JOBS_DIR / job_id / file_name
-    if file_name not in KNOWN_OUTPUTS and path.suffix.lower() not in {".csv", ".png"}:
+    if file_name not in KNOWN_OUTPUTS and path.suffix.lower() not in {".csv", ".png", ".html"}:
         raise HTTPException(status_code=404, detail="File not found")
     if not path.exists():
         raise HTTPException(status_code=404, detail="File not found")
@@ -513,4 +513,12 @@ def get_job_file(job_id: str, file_name: str):
         return FileResponse(path, media_type="text/csv", filename=file_name)
     if file_name.endswith(".png"):
         return FileResponse(path, media_type="image/png", filename=file_name)
+    if file_name.endswith(".html"):
+        return FileResponse(path, media_type="text/html", filename=file_name)
     return FileResponse(path, media_type="application/json", filename=file_name)
+
+
+@app.get("/api/jobs/{job_id}/{file_name}")
+def get_job_file_relative_alias(job_id: str, file_name: str):
+    """Support relative links from /api/jobs/{job_id}/report to sibling artifacts."""
+    return get_job_file(job_id, file_name)

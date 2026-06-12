@@ -22,7 +22,7 @@ from ingestion.registry import load_any
 from ingestion.schema_reader import parse_schema
 from engines.profiling_engine import run_profiling, run_profiling_html
 from engines.anomaly_engine import run_anomaly_detection
-from engines.visualizer import attach_diagnostic_charts
+from engines.visualizer import attach_diagnostic_charts, attach_overview_charts
 from engines.cross_table_engine import run_cross_table_analysis
 from engines.graph_engine import accepted_relationships_from_graph, reconstruct_graph
 from engines.schema_gate import apply_schema_gate
@@ -65,6 +65,8 @@ def _table_names_for_paths(data_paths: list) -> list[str]:
 
 
 def _artifact_kind(path: Path) -> str:
+    if path.name.startswith("statistical_profile") and path.suffix == ".html":
+        return "statistical_profile_html"
     if path.name == "cross_table_analysis.json":
         return "cross_table_analysis_json"
     if path.name == "relationship_graph.json":
@@ -109,6 +111,8 @@ def _artifact_source_layer(path: Path) -> str:
         return "L4_REPORTING"
     if path.name == "smart_eda_report.html":
         return "L4_REPORTING"
+    if path.name.startswith("statistical_profile") and path.suffix == ".html":
+        return "L1_PROFILING"
     if path.suffix == ".png":
         return "L3_5_CHARTS"
     if path.suffix == ".csv":
@@ -168,32 +172,76 @@ def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
         )
 
 
-def _multi_table_ydata_html(tables: dict[str, pd.DataFrame], minimal: bool = True) -> str:
-    if not tables:
-        return _safe_ydata_html(None, minimal=minimal)
+def _profile_artifact_fragment(profiles: list[dict[str, str]]) -> str:
+    if not profiles:
+        return (
+            "<!-- smart-eda-profile-fragment -->"
+            "<section class=\"profile-viewer profile-export-panel\" aria-label=\"Statistical profile exports\">"
+            "<div class=\"profile-viewer-header\">"
+            "<div><p class=\"eyebrow\">Profile Export</p><h2>No standalone profile was generated</h2></div>"
+            "<span class=\"profile-badge\">JSON artifacts available</span>"
+            "</div>"
+            "<div class=\"profile-export-body\"><p>Statistical details are available in the JSON artifacts for this run.</p></div>"
+            "</section>"
+        )
 
-    sections = [
-        "<!doctype html><html><head><meta charset=\"utf-8\">",
-        "<style>",
-        "body{font-family:Arial,sans-serif;margin:0;background:#f8fafc;color:#111827;}",
-        "header{padding:16px 20px;background:#ffffff;border-bottom:1px solid #e5e7eb;}",
-        "main{padding:16px 20px;display:grid;gap:18px;}",
-        "section{background:#ffffff;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;}",
-        "h1{font-size:20px;margin:0;} h2{font-size:16px;margin:0;padding:12px 14px;border-bottom:1px solid #e5e7eb;}",
-        "iframe{width:100%;height:720px;border:0;display:block;background:white;}",
-        "</style></head><body>",
-        f"<header><h1>Statistical profiles ({len(tables)} tables)</h1></header><main>",
-    ]
+    cards = []
+    for profile in profiles:
+        file_name = profile["file_name"]
+        table_name = profile["table_name"]
+        rows = profile["rows"]
+        columns = profile["columns"]
+        cards.append(
+            "<article class=\"profile-export-card\">"
+            "<div>"
+            f"<span>{html_lib.escape(table_name)}</span>"
+            f"<strong>{html_lib.escape(file_name)}</strong>"
+            f"<p>{html_lib.escape(rows)} rows · {html_lib.escape(columns)} columns</p>"
+            "</div>"
+            f"<a href=\"{html_lib.escape(file_name)}\" target=\"_blank\" rel=\"noopener\">Open profile</a>"
+            "</article>"
+        )
+    return (
+        "<!-- smart-eda-profile-fragment -->"
+        "<section class=\"profile-viewer profile-export-panel\" aria-label=\"Statistical profile exports\">"
+        "<div class=\"profile-viewer-header\">"
+        "<div><p class=\"eyebrow\">Profile Exports</p><h2>Standalone Statistical Profiles</h2></div>"
+        "<span class=\"profile-badge\">opens separately</span>"
+        "</div>"
+        "<div class=\"profile-export-body\">"
+        "<p>Full ydata profiles are exported as separate HTML files to keep the Smart EDA report focused and avoid nested reports.</p>"
+        "<div class=\"profile-export-grid\">"
+        f"{''.join(cards)}"
+        "</div>"
+        "</div>"
+        "</section>"
+    )
+
+
+def _write_single_ydata_profile(df: pd.DataFrame, out: Path, minimal: bool = True) -> str:
+    file_name = "statistical_profile.html"
+    (out / file_name).write_text(_safe_ydata_html(df, minimal=minimal), encoding="utf-8")
+    return _profile_artifact_fragment([{
+        "table_name": "dataset",
+        "file_name": file_name,
+        "rows": str(len(df)),
+        "columns": str(len(df.columns)),
+    }])
+
+
+def _write_multi_ydata_profiles(tables: dict[str, pd.DataFrame], out: Path, minimal: bool = True) -> str:
+    profiles: list[dict[str, str]] = []
     for table_name, df in tables.items():
-        profile_html = _safe_ydata_html(df, minimal=minimal)
-        sections.extend([
-            "<section>",
-            f"<h2>{html_lib.escape(table_name)}</h2>",
-            f"<iframe title=\"{html_lib.escape(table_name)} profile\" srcdoc=\"{html_lib.escape(profile_html, quote=True)}\"></iframe>",
-            "</section>",
-        ])
-    sections.append("</main></body></html>")
-    return "".join(sections)
+        safe_name = _safe_artifact_stem(table_name)
+        file_name = f"statistical_profile_{safe_name}.html"
+        (out / file_name).write_text(_safe_ydata_html(df, minimal=minimal), encoding="utf-8")
+        profiles.append({
+            "table_name": table_name,
+            "file_name": file_name,
+            "rows": str(len(df)),
+            "columns": str(len(df.columns)),
+        })
+    return _profile_artifact_fragment(profiles)
 
 
 def _profile_data_quality(
@@ -222,6 +270,12 @@ def _profile_data_quality(
         str(out),
         artifact_prefix=artifact_prefix,
     )
+    findings = attach_overview_charts(
+        findings,
+        df,
+        str(out),
+        artifact_prefix=artifact_prefix,
+    )
     table = load_calibrator_table()
     col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
     all_dq = apply_compound(findings.anomalies + col_findings)
@@ -247,11 +301,18 @@ def _combine_multi_findings(
 ) -> DataQualityFindings:
     columns = {}
     anomalies = []
+    overview_charts = {}
     for table_name, findings in table_findings.items():
         for column, stats in findings.columns.items():
             columns[f"{table_name}.{column}"] = stats
         anomalies.extend(_prefix_issue(issue, table_name) for issue in findings.anomalies)
-    return DataQualityFindings(dataset_meta=meta, columns=columns, anomalies=anomalies)
+        for chart_key, chart_path in findings.dataset_meta.overview_charts.items():
+            overview_charts[f"{table_name}.{chart_key}"] = chart_path
+    return DataQualityFindings(
+        dataset_meta=meta.model_copy(update={"overview_charts": overview_charts}),
+        columns=columns,
+        anomalies=anomalies,
+    )
 
 
 def _multi_data_quality_bundle(
@@ -314,6 +375,12 @@ def run(
         str(out),
         artifact_prefix=_safe_artifact_stem(data_path),
     )
+    findings = attach_overview_charts(
+        findings,
+        df,
+        str(out),
+        artifact_prefix=_safe_artifact_stem(data_path),
+    )
 
     table = load_calibrator_table()
     col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
@@ -341,10 +408,11 @@ def run(
     guardrail_path = out / "guardrail_report.json"
     html_report_path = out / "smart_eda_report.html"
     l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(findings, verdict, schema)
+    profile_fragment = _write_single_ydata_profile(df, out, minimal=profiling_minimal)
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
-        _safe_ydata_html(df, minimal=profiling_minimal),
+        profile_fragment,
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
     )
@@ -450,7 +518,7 @@ def run_multi(
         "warnings": [*schema_gate.warnings, *graph_result.warnings],
     })
     verdict = aggregate(
-        meta,
+        combined_findings.dataset_meta,
         dq_findings=combined_findings.anomalies,
         integrity_errors=schema_for_output.integrity_errors,
     )
@@ -480,7 +548,7 @@ def run_multi(
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
-        _multi_table_ydata_html(cross_tables, minimal=profiling_minimal),
+        _write_multi_ydata_profiles(cross_tables, out, minimal=profiling_minimal),
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
     )

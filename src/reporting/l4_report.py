@@ -159,6 +159,7 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
         raise RuntimeError("OPENAI_API_KEY is not set")
 
     model = os.getenv(model_env, default_model)
+    max_tokens = int(os.getenv("SMART_EDA_L4_MAX_TOKENS", "2200"))
     api_mode = os.getenv("SMART_EDA_L4_API_MODE", "chat_completions").strip().lower().replace("-", "_")
     if api_mode in {"chat", "chat_completions"}:
         endpoint = "https://api.openai.com/v1/chat/completions"
@@ -169,7 +170,7 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0,
-            "max_tokens": 1200,
+            "max_tokens": max_tokens,
         }
         extractor = _extract_chat_completion_text
     elif api_mode == "responses":
@@ -178,7 +179,7 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
             "model": model,
             "instructions": instructions,
             "input": prompt,
-            "max_output_tokens": 1200,
+            "max_output_tokens": max_tokens,
         }
         extractor = _extract_openai_text
     else:
@@ -220,14 +221,47 @@ async def _call_openai_async(
 
 
 def _render_cluster_markdown(cluster: IssueCluster) -> str:
+    affected_counts = [
+        int(issue.get("affected_count", 0) or 0)
+        for issue in cluster.issues
+    ]
+    largest_affected = max(affected_counts) if affected_counts else 0
+    dimensions = sorted({
+        str(dimension)
+        for issue in cluster.issues
+        for dimension in issue.get("dq_dimensions", [])
+        if dimension
+    })
+    impacts = sorted({
+        str(impact)
+        for issue in cluster.issues
+        for impact in issue.get("ml_impact", [])
+        if impact
+    })
     lines = [
         f"### `{cluster.issue_type}`",
         "",
-        f"Effective severity: `{cluster.max_severity}`.",
+        "#### Evidence Snapshot",
+        "",
+        f"- Cluster finding count: `{len(cluster.issues)}`.",
+        f"- Maximum effective severity: `{cluster.max_severity}`.",
+        f"- Largest affected-row count in a single finding: `{largest_affected}`.",
     ]
     if cluster.affected_columns:
-        lines.append("Affected scope: " + ", ".join(f"`{column}`" for column in cluster.affected_columns) + ".")
+        lines.append("- Affected scope: " + ", ".join(f"`{column}`" for column in cluster.affected_columns) + ".")
+    if dimensions:
+        lines.append("- Data-quality dimensions recorded in evidence: " + ", ".join(f"`{dimension}`" for dimension in dimensions) + ".")
+    if impacts:
+        lines.append("- Machine-learning impact labels recorded in evidence: " + ", ".join(f"`{impact}`" for impact in impacts) + ".")
     lines.extend([
+        "",
+        "#### Interpretation",
+        "",
+        f"- The cluster groups deterministic evidence for `{cluster.issue_type}` with maximum effective severity `{cluster.max_severity}`.",
+        "- Review the scoped columns or tables before using this dataset for modeling, reporting, joins, or downstream business analysis.",
+        "- Treat this section as a triage summary from observed evidence, not as a causal explanation.",
+        "",
+        "#### Evidence Table",
         "",
         "| Severity | Scope | Affected |",
         "| --- | --- | --- |",
@@ -242,7 +276,14 @@ def _render_cluster_markdown(cluster: IssueCluster) -> str:
         else:
             affected_text = f"`{affected_count}` (`{_pct(float(affected_percent))}`)"
         lines.append(f"| `{severity}` | {_issue_scope(scope if scope != 'dataset' else None)} | {affected_text} |")
-    lines.append("")
+    lines.extend([
+        "",
+        "#### Suggested Follow-up",
+        "",
+        "- Confirm whether the affected records should be corrected, filtered, or documented before downstream use.",
+        "- Re-run the report after remediation so the verdict and issue counts can be compared against this evidence snapshot.",
+        "",
+    ])
     return "\n".join(lines)
 
 
@@ -255,8 +296,15 @@ async def _run_analyst(
 
     if llm_enabled:
         prompt = (
-            "Write one concise Markdown section for this issue cluster. "
-            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
+            "Write one detailed Markdown section for this issue cluster. "
+            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks. "
+            "Do not use numbered lists, ordinal numbers, or extra counts that are not present in the JSON slice.\n\n"
+            "Required structure:\n"
+            "- Heading with the issue type.\n"
+            "- Evidence Snapshot: severity, finding count, scope, affected-row counts, dimensions or impact labels if present.\n"
+            "- Interpretation: explain what the data scientist should inspect and why this matters for analysis.\n"
+            "- Evidence Table: include severity, scope, affected count, and affected percent when present.\n"
+            "- Suggested Follow-up: concrete analyst checks that do not invent new thresholds or facts.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
         for attempt in range(1, 4):
@@ -264,8 +312,12 @@ async def _run_analyst(
                 markdown = await _call_openai_async(
                     prompt,
                     (
-                        "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
-                        "Do not invent numbers, thresholds, columns, tables, or recommendations."
+                        "You are an EDA Analyst agent. Explain only the assigned issue cluster in a detailed but grounded way. "
+                        "Do not invent numbers, thresholds, columns, tables, or recommendations. "
+                        "Write a heading plus structured sections and bullets; bullets must not start with numbers. "
+                        "Use table.column references only when that exact relationship exists in evidence. "
+                        "Do not use causal language such as causes, caused by, causing, leads to, "
+                        "results in, or due to."
                     ),
                     "SMART_EDA_L4_ANALYST_MODEL",
                     "gpt-4o-mini",
@@ -351,12 +403,18 @@ async def _run_editor(
     meta = verdict.dataset_meta
     fallback = EditorOutput(
         executive_summary=(
-            f"Dataset {meta.file_name} has {meta.n} rows and {meta.n_var} columns. "
-            f"The deterministic verdict is {verdict.verdict.value} with {verdict.summary.total_issues} total issues."
+            f"Dataset `{meta.file_name}` has `{meta.n}` rows and `{meta.n_var}` columns. "
+            f"The deterministic verdict is `{verdict.verdict.value}` with `{verdict.summary.total_issues}` total issues. "
+            "Read this report as an evidence-backed triage note: start with the verdict, then inspect the ranked issue clusters and any schema or cross-table notes."
         ),
         verdict_explanation=verdict.verdict_rationale,
         cross_table_evaluation=_cross_table_summary(cross_table_analysis),
-        priority_ranking=", ".join(output.cluster_type for output in analyst_outputs),
+        priority_ranking=(
+            "Priority issue clusters: "
+            + ", ".join(f"`{output.cluster_type}`" for output in analyst_outputs)
+            if analyst_outputs
+            else "No WARN, HIGH, or CRITICAL issue cluster was dispatched to Analyst review."
+        ),
     )
     llm_enabled = _llm_enabled()
     editor = fallback
@@ -368,12 +426,13 @@ async def _run_editor(
             "cross_table_analysis": cross_table_analysis.model_dump(mode="json") if cross_table_analysis else None,
         }
         prompt = (
-            "Write valid JSON with strictly string values for these keys: "
-            "executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking.\n"
-            "priority_ranking MUST be a string (e.g. a comma-separated list or a text paragraph), NOT an array.\n"
-            "Use only the provided evidence.\n"
+            "Write JSON with keys executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking. "
+            "Every value must be a detailed string, not an object and not an array. "
+            "Use only the provided evidence. The executive_summary should be several sentences. "
+            "The verdict_explanation should explain the decision signal and the most important evidence. "
+            "The priority_ranking should name the issue clusters in practical review order. "
             "For cross_table_evaluation, write a comprehensive narrative explaining the cross-table correlations and their business meaning if they exist. "
-            "If no cross-table analysis is available, return null or a brief statement.\n\n"
+            "If no cross-table analysis is available, return a brief statement.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
         for attempt in range(1, 4):
@@ -382,7 +441,11 @@ async def _run_editor(
                     prompt,
                     (
                         "You are an EDA Editor agent. Return valid compact JSON only. "
-                        "Do not invent numbers, columns, tables, relationships, or thresholds."
+                        "The JSON values must be strings. Do not return nested objects or arrays. "
+                        "Do not invent numbers, columns, tables, relationships, or thresholds. "
+                        "Write enough detail for a data scientist to understand what to inspect first. "
+                        "Do not use causal language such as causes, caused by, causing, leads to, "
+                        "results in, or due to."
                     ),
                     "SMART_EDA_L4_EDITOR_MODEL",
                     "gpt-4o",

@@ -44,7 +44,7 @@
       </button>
       <button id="tab-button-stats" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-stats" data-tab="stats">
         <span>Statistical Details</span>
-        <small>Interactive ydata profile</small>
+        <small>Profile exports</small>
       </button>
     </nav>
 
@@ -56,16 +56,7 @@
       <section id="tab-stats" class="tab-content" role="tabpanel" aria-labelledby="tab-button-stats" hidden>
         <div class="stats-workbench">
           {statistical_overview}
-          <section class="profile-viewer" aria-label="Interactive statistical profile">
-            <div class="profile-viewer-header">
-              <div>
-                <p class="eyebrow">Interactive Profile</p>
-                <h2>YData Statistical Report</h2>
-              </div>
-              <span class="profile-badge">Hover + zoom inside report</span>
-            </div>
-            <iframe srcdoc="{ydata_escaped}" class="ydata-frame" title="Statistical details from ydata profiling"></iframe>
-          </section>
+          {profile_viewer_html}
         </div>
       </section>
     </main>

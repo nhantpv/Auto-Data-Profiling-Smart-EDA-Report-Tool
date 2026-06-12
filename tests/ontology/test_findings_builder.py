@@ -132,5 +132,5 @@ class TestBuildDataQualityFindings:
         assert outlier.top_10_samples[0]["_row_index"] == 30
         assert outlier.top_10_samples[0]["_row_position"] == 2
         assert outlier.full_anomalies_export_path is not None
-        exported = pd.read_csv(outlier.full_anomalies_export_path)
+        exported = pd.read_csv(tmp_path / outlier.full_anomalies_export_path)
         assert exported.loc[0, "value"] == 999
