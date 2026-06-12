@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from config.env_loader import load_project_dotenv
@@ -377,6 +377,16 @@ def get_smart_eda_report(job_id: str) -> HTMLResponse:
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not yet generated")
     return HTMLResponse(report_path.read_text(encoding="utf-8"))
+
+
+@app.head("/api/jobs/{job_id}/report")
+def head_smart_eda_report(job_id: str) -> Response:
+    """Allow load balancers and monitors to check final report availability."""
+    job_id = _validate_job_id(job_id)
+    report_path = JOBS_DIR / job_id / "smart_eda_report.html"
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report not yet generated")
+    return Response(media_type="text/html")
 
 
 @app.get("/api/jobs/{job_id}/schema-suggestions")

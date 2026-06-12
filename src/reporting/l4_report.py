@@ -4,6 +4,7 @@ import asyncio
 import html
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from typing import Any
@@ -83,6 +84,49 @@ def _strip_json_fences(text: str) -> str:
     if stripped.endswith("```"):
         stripped = stripped[:-3].strip()
     return stripped
+
+
+def _guardrail_feedback(report: GuardrailReport, output_format: str) -> str:
+    if not report.violations:
+        return ""
+    violations = "\n".join(
+        f"- {violation.check}: {violation.value} ({violation.detail})"
+        for violation in report.violations[:8]
+    )
+    return (
+        "\n\nPrevious attempt failed guardrail validation. Revise the answer and fix "
+        "these exact issues without adding new facts:\n"
+        f"{violations}\n"
+        f"Return {output_format} only."
+    )
+
+
+_CAUSAL_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bdue to\b", re.IGNORECASE), "with"),
+    (re.compile(r"\bcaused by\b", re.IGNORECASE), "associated with"),
+    (re.compile(r"\bcauses?\b", re.IGNORECASE), "is associated with"),
+    (re.compile(r"\bcausing\b", re.IGNORECASE), "associated with"),
+    (re.compile(r"\bleads? to\b", re.IGNORECASE), "is associated with"),
+    (re.compile(r"\bresult(?:s|ed)? in\b", re.IGNORECASE), "is associated with"),
+)
+
+
+def _neutralize_causation_language(text: str | None) -> str | None:
+    if text is None:
+        return None
+    repaired = text
+    for pattern, replacement in _CAUSAL_REPLACEMENTS:
+        repaired = pattern.sub(replacement, repaired)
+    return repaired
+
+
+def _repair_editor_output(candidate: EditorOutput) -> EditorOutput:
+    return candidate.model_copy(update={
+        "executive_summary": _neutralize_causation_language(candidate.executive_summary) or "",
+        "verdict_explanation": _neutralize_causation_language(candidate.verdict_explanation) or "",
+        "cross_table_evaluation": _neutralize_causation_language(candidate.cross_table_evaluation),
+        "priority_ranking": _neutralize_causation_language(candidate.priority_ranking) or "",
+    })
 
 
 def _compact_payload(
@@ -259,13 +303,16 @@ async def _run_analyst(
             "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
+        feedback = ""
         for attempt in range(1, 4):
             try:
                 markdown = await _call_openai_async(
-                    prompt,
+                    f"{prompt}{feedback}",
                     (
                         "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
-                        "Do not invent numbers, thresholds, columns, tables, or recommendations."
+                        "Do not invent numbers, thresholds, columns, tables, or recommendations. "
+                        "Do not use causal language such as causes, caused by, causing, leads to, "
+                        "results in, or due to."
                     ),
                     "SMART_EDA_L4_ANALYST_MODEL",
                     "gpt-4o-mini",
@@ -296,10 +343,14 @@ async def _run_analyst(
                     cluster=cluster.issue_type,
                 )
             if llm_errors is not None:
-                violation_checks = ",".join(violation.check for violation in report.violations)
+                violation_checks = ",".join(
+                    f"{violation.check}:{violation.value}"
+                    for violation in report.violations
+                )
                 llm_errors.append(
                     f"analyst:{cluster.issue_type}:attempt_{attempt}: guardrail_failed:{violation_checks}"
                 )
+            feedback = _guardrail_feedback(report, "one Markdown section")
 
     report = verify_analyst_output(
         fallback_markdown,
@@ -372,13 +423,16 @@ async def _run_editor(
             "Use only the provided evidence.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
+        feedback = ""
         for attempt in range(1, 4):
             try:
                 text = await _call_openai_async(
-                    prompt,
+                    f"{prompt}{feedback}",
                     (
                         "You are an EDA Editor agent. Return valid compact JSON only. "
-                        "Do not invent numbers, columns, tables, relationships, or thresholds."
+                        "Do not invent numbers, columns, tables, relationships, or thresholds. "
+                        "Do not use causal language such as causes, caused by, causing, leads to, "
+                        "results in, or due to."
                     ),
                     "SMART_EDA_L4_EDITOR_MODEL",
                     "gpt-4o",
@@ -387,6 +441,11 @@ async def _run_editor(
             except Exception as exc:
                 if llm_errors is not None:
                     llm_errors.append(f"editor:attempt_{attempt}: {exc}")
+                feedback = (
+                    "\n\nPrevious attempt failed parsing or request handling. "
+                    "Return valid compact JSON only with keys executive_summary, "
+                    "verdict_explanation, cross_table_evaluation, priority_ranking."
+                )
                 continue
             report = verify_editor_output(
                 candidate.model_dump(mode="json"),
@@ -399,9 +458,27 @@ async def _run_editor(
                 candidate.guardrail_passed = True
                 candidate.retry_count = attempt - 1
                 return candidate, _agent_detail("editor", report, attempt - 1)
+            repaired = _repair_editor_output(candidate)
+            if repaired != candidate:
+                repaired_report = verify_editor_output(
+                    repaired.model_dump(mode="json"),
+                    [output.markdown for output in analyst_outputs],
+                    verdict,
+                    provider="openai-editor-repaired",
+                    used_fallback=False,
+                )
+                if repaired_report.status == "passed":
+                    repaired.guardrail_passed = True
+                    repaired.retry_count = attempt - 1
+                    return repaired, _agent_detail("editor", repaired_report, attempt - 1)
+                report = repaired_report
             if llm_errors is not None:
-                violation_checks = ",".join(violation.check for violation in report.violations)
+                violation_checks = ",".join(
+                    f"{violation.check}:{violation.value}"
+                    for violation in report.violations
+                )
                 llm_errors.append(f"editor:attempt_{attempt}: guardrail_failed:{violation_checks}")
+            feedback = _guardrail_feedback(report, "valid compact JSON")
 
     report = verify_editor_output(
         fallback.model_dump(mode="json"),

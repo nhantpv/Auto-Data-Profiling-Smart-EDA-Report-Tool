@@ -1,7 +1,9 @@
 from ontology.models import (
+    AnomalyRecord,
     DataQualityFindings,
     DatasetMeta,
     DatasetVerdict,
+    Severity,
     Verdict,
     VerdictSummary,
 )
@@ -61,6 +63,29 @@ def test_guardrail_allows_numeric_tolerance_and_year_passthrough():
     report = validate_narrative(
         "Dataset `data.csv` has `12.00001` rows, `16.67%` duplicates, and was reviewed in `2026`.",
         _findings(),
+        _verdict(),
+    )
+
+    assert report.status == "passed"
+
+
+def test_guardrail_allows_agent_level_provenance_and_raw_percent():
+    findings = _findings()
+    findings.anomalies = [
+        AnomalyRecord(
+            issue_type="MISSINGNESS",
+            description="missing",
+            severity=Severity.WARN,
+            affected_count=1,
+            affected_percent=0.0833,
+            affected_column="age",
+            top_10_samples=[],
+        )
+    ]
+
+    report = validate_narrative(
+        "Issue `MISSINGNESS` has provenance `OBSERVED` and raw rate `0.0833` on `age`.",
+        findings,
         _verdict(),
     )
 

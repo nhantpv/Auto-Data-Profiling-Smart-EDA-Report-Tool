@@ -1,5 +1,6 @@
 import json
 import time
+from threading import Lock
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -197,6 +198,10 @@ def test_job_report_endpoint_serves_html(tmp_path, monkeypatch):
     assert "text/html" in report.headers["content-type"]
     assert "Smart report" in report.text
 
+    head = client.head(f"/api/jobs/{payload['job_id']}/report")
+    assert head.status_code == 200
+    assert "text/html" in head.headers["content-type"]
+
 
 def test_schema_suggestions_and_confirm_endpoints(tmp_path, monkeypatch):
     client = _client(tmp_path, monkeypatch)
@@ -283,6 +288,58 @@ def test_rejects_upload_over_limit(tmp_path, monkeypatch):
     )
 
     assert response.status_code == 413
+
+
+def test_accepts_large_upload_with_background_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "MAX_UPLOAD_BYTES", 5 * 1024 * 1024)
+    client = _client(tmp_path, monkeypatch)
+
+    def fake_run(data_path, out_dir, schema_path=None, profiling_minimal=False):
+        assert Path(data_path).stat().st_size > 2 * 1024 * 1024
+        _write_outputs(out_dir)
+        return {}
+
+    monkeypatch.setattr(web_app.run_pipeline, "run", fake_run)
+    large_body = "id,value\n" + "".join(f"{index},{index % 17}\n" for index in range(300_000))
+    response = client.post(
+        "/api/jobs",
+        files={"data_file": ("large.csv", large_body.encode("utf-8"), "text/csv")},
+    )
+
+    assert response.status_code == 202
+    payload = _await_job(client, response.json())
+    assert payload["status"] == "completed"
+    assert payload["guardrail_report"]["status"] == "passed"
+
+
+def test_job_queue_accepts_multiple_background_jobs(tmp_path, monkeypatch):
+    monkeypatch.setattr(web_app, "JOB_WORKERS", 2)
+    monkeypatch.setattr(web_app, "_JOB_RUNTIME", None)
+    client = _client(tmp_path, monkeypatch)
+    calls: list[str] = []
+    lock = Lock()
+
+    def fake_run(data_path, out_dir, schema_path=None, profiling_minimal=False):
+        with lock:
+            calls.append(Path(data_path).name)
+        time.sleep(0.1)
+        _write_outputs(out_dir)
+        return {}
+
+    monkeypatch.setattr(web_app.run_pipeline, "run", fake_run)
+    responses = [
+        client.post(
+            "/api/jobs",
+            files={"data_file": (f"data_{index}.csv", b"id,value\n1,10\n", "text/csv")},
+        )
+        for index in range(5)
+    ]
+
+    assert all(response.status_code == 202 for response in responses)
+    payloads = [_await_job(client, response.json()) for response in responses]
+    assert {payload["status"] for payload in payloads} == {"completed"}
+    assert len({payload["job_id"] for payload in payloads}) == 5
+    assert sorted(calls) == [f"data_{index}.csv" for index in range(5)]
 
 
 def test_retry_job_reuses_saved_inputs(tmp_path, monkeypatch):

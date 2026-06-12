@@ -26,6 +26,11 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore:.*:pyparsing.exceptions.PyparsingDeprecationWarning",
+    "ignore:.*'imghdr' is deprecated.*:DeprecationWarning",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated.*",
+]
 
 [tool.pyrefly]
 search_path = ["src"]

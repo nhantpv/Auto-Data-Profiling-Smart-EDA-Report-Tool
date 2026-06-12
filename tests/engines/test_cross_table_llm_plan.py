@@ -1,5 +1,8 @@
+import json
+
 import pandas as pd
 
+from engines import cross_table_engine
 from engines.cross_table_engine import compute_planned_correlations, validate_llm_plan
 from ontology.models import RelationshipInfo
 
@@ -14,6 +17,37 @@ def _relationship() -> RelationshipInfo:
         status="inferred",
         confidence=0.95,
     )
+
+
+def test_call_openai_plan_strips_json_fences(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+        def read(self):
+            return json.dumps({
+                "output_text": (
+                    "```json\n"
+                    '{"correlation_pairs": [], "skipped_pairs": [{"reason": "none"}]}'
+                    "\n```"
+                )
+            }).encode("utf-8")
+
+    def fake_urlopen(_request, timeout):
+        assert timeout == 30
+        return FakeResponse()
+
+    monkeypatch.setattr(cross_table_engine.urllib.request, "urlopen", fake_urlopen)
+
+    raw = cross_table_engine._call_openai_plan("{}")
+
+    assert raw["correlation_pairs"] == []
+    assert raw["skipped_pairs"][0]["reason"] == "none"
 
 
 def test_validate_llm_plan_rejects_unknown_pairs():
@@ -48,6 +82,19 @@ def test_validate_llm_plan_rejects_unknown_pairs():
 
     assert len(plan.correlation_pairs) == 1
     assert plan.skipped_pairs
+
+
+def test_validate_llm_plan_normalizes_string_skipped_pairs():
+    plan = validate_llm_plan(
+        {
+            "correlation_pairs": [],
+            "skipped_pairs": ["No meaningful numeric measure pair exists."],
+        },
+        {"users": ["id", "credit_score"], "orders": ["user_id", "total"]},
+        [_relationship()],
+    )
+
+    assert plan.skipped_pairs == [{"reason": "No meaningful numeric measure pair exists."}]
 
 
 def test_validate_llm_plan_rejects_identifier_measures_and_same_table():

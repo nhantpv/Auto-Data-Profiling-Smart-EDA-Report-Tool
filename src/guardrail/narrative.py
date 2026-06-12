@@ -310,9 +310,14 @@ def build_narrative_evidence(
 
         for issue in findings.anomalies:
             references.add(issue.issue_type)
+            references.add(issue.provenance.value)
             if issue.affected_column:
                 references.add(issue.affected_column)
-            _add_numbers(numbers, [issue.affected_count, issue.confidence])
+            if issue.finding_id:
+                references.add(issue.finding_id)
+            if issue.threshold_ref:
+                references.add(issue.threshold_ref)
+            _add_numbers(numbers, [issue.affected_count, issue.confidence, issue.affected_percent])
             _add_percents(numbers, [issue.affected_percent])
 
     if schema is not None:
@@ -327,9 +332,14 @@ def build_narrative_evidence(
         for issue in schema.integrity_errors:
             references.add(issue.error_type)
             references.add(issue.affected_table)
+            references.add(issue.provenance.value)
             if issue.affected_column:
                 references.add(issue.affected_column)
                 references.add(f"{issue.affected_table}.{issue.affected_column}")
+            if issue.finding_id:
+                references.add(issue.finding_id)
+            if issue.threshold_ref:
+                references.add(issue.threshold_ref)
             _add_numbers(numbers, [issue.affected_count, issue.confidence])
 
         for rel in schema.relationships:

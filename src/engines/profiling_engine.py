@@ -1,7 +1,14 @@
 import json
 import logging
+import warnings
 import pandas as pd
-from ydata_profiling import ProfileReport
+
+try:
+    from data_profiling import ProfileReport
+except ImportError:
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        from ydata_profiling import ProfileReport
 
 logger = logging.getLogger(__name__)
 

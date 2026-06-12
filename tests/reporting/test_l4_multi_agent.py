@@ -145,6 +145,29 @@ def test_multi_agent_l4_records_llm_errors_on_fallback(monkeypatch):
     assert any("HTTP 400 bad request" in error for error in guardrail.llm_errors)
 
 
+def test_multi_agent_l4_repairs_editor_causal_language(monkeypatch):
+    monkeypatch.setattr(l4_report, "_llm_enabled", lambda: True)
+
+    async def fake_call(_prompt, _instructions, model_env, _default_model):
+        if model_env == "SMART_EDA_L4_ANALYST_MODEL":
+            return "### `MISSINGNESS`\n\nAffected scope: `age`. Affected rows: `1`."
+        return (
+            '{"executive_summary":"Dataset `data.csv` has `10` rows.",'
+            '"verdict_explanation":"Verdict `WARN` due to `MISSINGNESS` in `age`.",'
+            '"priority_ranking":"`MISSINGNESS`"}'
+        )
+
+    monkeypatch.setattr(l4_report, "_call_openai_async", fake_call)
+    findings, verdict = _sample_l4_inputs()
+
+    _text, guardrail, result = generate_multi_agent_report(findings, verdict)
+
+    assert guardrail.status == "passed"
+    assert result.used_fallback is False
+    assert result.editor_output.verdict_explanation == "Verdict `WARN` with `MISSINGNESS` in `age`."
+    assert guardrail.agents[-1]["provider"] == "openai-editor-repaired"
+
+
 def test_multi_agent_l4_renders_full_appendix_html(monkeypatch):
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
     meta = DatasetMeta(

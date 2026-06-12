@@ -373,7 +373,12 @@ def validate_llm_plan(
     """
     raw = plan.model_dump(mode="json") if isinstance(plan, LlmCorrelationPlan) else plan
     valid_pairs: list[CorrelationPairPlan] = []
-    skipped: list[dict[str, Any]] = list(raw.get("skipped_pairs", []))
+    skipped: list[dict[str, Any]] = []
+    for skipped_item in raw.get("skipped_pairs", []):
+        if isinstance(skipped_item, dict):
+            skipped.append(skipped_item)
+        else:
+            skipped.append({"reason": str(skipped_item)})
     allowed_methods = {"mean", "sum", "count", "min", "max", "median"}
     table_columns = {
         table: _columns_for_table(meta)
@@ -422,7 +427,7 @@ def validate_llm_plan(
     return LlmCorrelationPlan(
         correlation_pairs=valid_pairs,
         skipped_pairs=skipped,
-        model=str(raw.get("model", "")),
+        model=str(raw.get("model") or os.getenv("SMART_EDA_L3B_MODEL", "gpt-4o-mini")),
         temperature=float(raw.get("temperature", 0.0)),
         seed=int(raw.get("seed", 42)),
     )
@@ -438,6 +443,19 @@ def _extract_openai_text(payload: dict[str, Any]) -> str:
             if isinstance(text, str):
                 parts.append(text)
     return "\n".join(parts).strip()
+
+
+def _strip_json_fences(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_break = stripped.find("\n")
+    if first_break == -1:
+        return ""
+    stripped = stripped[first_break + 1:].strip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3].strip()
+    return stripped
 
 
 def _call_openai_plan(prompt: str) -> dict[str, Any]:
@@ -476,7 +494,7 @@ def _call_openai_plan(prompt: str) -> dict[str, Any]:
     text = _extract_openai_text(payload)
     if not text:
         raise RuntimeError("OpenAI correlation planner returned empty text")
-    return json.loads(text)
+    return json.loads(_strip_json_fences(text))
 
 
 async def llm_plan_correlations(
