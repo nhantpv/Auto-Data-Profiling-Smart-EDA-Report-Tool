@@ -30,7 +30,7 @@ from engines.schema_engine import (
 from ontology.findings_builder import build_data_quality_findings
 from ontology.models import (
     AnomalyRecord, ArtifactManifest, ArtifactRecord, DataQualityFindings,
-    DatasetMeta,
+    CrossTableAnalysis, CrossTableCorrelation, DatasetMeta,
 )
 from severity.calibrator import calibrate_columns, load_calibrator_table
 from severity.compound import apply_compound
@@ -67,6 +67,8 @@ def _artifact_kind(path: Path) -> str:
         return "statistical_profile_html"
     if path.name == "cross_table_analysis.json":
         return "cross_table_analysis_json"
+    if path.name == "cross_table_correlations.csv":
+        return "cross_table_correlations_csv"
     if path.name == "relationship_graph.json":
         return "relationship_graph_json"
     if path.name == "schema_gate.json":
@@ -98,6 +100,8 @@ def _artifact_source_layer(path: Path) -> str:
     if path.name == "guardrail_report.json":
         return "L4_GUARDRAIL"
     if path.name == "cross_table_analysis.json":
+        return "L4_CROSS_TABLE"
+    if path.name == "cross_table_correlations.csv":
         return "L4_CROSS_TABLE"
     if path.name == "relationship_graph.json":
         return "L2C_GRAPH"
@@ -240,6 +244,112 @@ def _write_multi_ydata_profiles(tables: dict[str, pd.DataFrame], out: Path, mini
             "columns": str(len(df.columns)),
         })
     return _profile_artifact_fragment(profiles)
+
+
+def _display_feature(feature: str) -> str:
+    return feature.replace("__via__", ".via.").replace("__", ".")
+
+
+def _correlation_table_html(
+    title: str,
+    source: str,
+    correlations: list[CrossTableCorrelation],
+) -> str:
+    if not correlations:
+        return ""
+    rows = []
+    for corr in correlations[:25]:
+        rows.append(
+            "<tr>"
+            f"<td>{html_lib.escape(source)}</td>"
+            f"<td>{corr.coefficient:.4f}</td>"
+            f"<td>{html_lib.escape(corr.method)}</td>"
+            f"<td>{corr.n:,}</td>"
+            f"<td><code>{html_lib.escape(_display_feature(corr.left_feature))}</code></td>"
+            f"<td><code>{html_lib.escape(_display_feature(corr.right_feature))}</code></td>"
+            "</tr>"
+        )
+    return (
+        f"<h3>{html_lib.escape(title)}</h3>"
+        "<div class=\"cross-table-correlation-table\">"
+        "<table>"
+        "<thead><tr>"
+        "<th>Source</th><th>Coefficient</th><th>Method</th><th>N</th><th>Left feature</th><th>Right feature</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>"
+    )
+
+
+def _cross_table_correlation_fragment(analysis: CrossTableAnalysis) -> str:
+    planned = _correlation_table_html(
+        "Planned Aggregate Correlations",
+        "llm_validated_plan",
+        analysis.planned_correlations,
+    )
+    scanned = _correlation_table_html(
+        "Safe-Join Numeric Correlations",
+        "safe_join_scan",
+        analysis.correlations,
+    )
+    body = planned + scanned
+    if not body:
+        body = "<p>No cross-table numeric correlations passed the current filters for this run.</p>"
+    warnings = ""
+    if analysis.warnings:
+        warning_items = "".join(
+            f"<li>{html_lib.escape(warning)}</li>"
+            for warning in analysis.warnings[:8]
+        )
+        warnings = f"<ul class=\"insight-list\">{warning_items}</ul>"
+    return (
+        "<section class=\"profile-viewer profile-export-panel\" aria-label=\"Cross-table correlations\">"
+        "<div class=\"profile-viewer-header\">"
+        "<div><p class=\"eyebrow\">Cross-Table</p><h2>Relationship-Aware Correlations</h2></div>"
+        f"<span class=\"profile-badge\">{html_lib.escape(analysis.status)}</span>"
+        "</div>"
+        "<div class=\"profile-export-body\">"
+        "<p>These are association checks across related tables. They are exported separately from YData because "
+        "YData profiles one DataFrame at a time.</p>"
+        f"{body}"
+        f"{warnings}"
+        "</div>"
+        "</section>"
+    )
+
+
+def _write_cross_table_correlations_csv(analysis: CrossTableAnalysis, out: Path) -> Path:
+    rows = []
+    for source, correlations in (
+        ("llm_validated_plan", analysis.planned_correlations),
+        ("safe_join_scan", analysis.correlations),
+    ):
+        for corr in correlations:
+            rows.append({
+                "source": source,
+                "left_feature": corr.left_feature,
+                "right_feature": corr.right_feature,
+                "left_table": corr.left_table,
+                "right_table": corr.right_table,
+                "method": corr.method,
+                "coefficient": corr.coefficient,
+                "abs_coefficient": corr.abs_coefficient,
+                "n": corr.n,
+            })
+    path = out / "cross_table_correlations.csv"
+    pd.DataFrame(rows, columns=[
+        "source",
+        "left_feature",
+        "right_feature",
+        "left_table",
+        "right_table",
+        "method",
+        "coefficient",
+        "abs_coefficient",
+        "n",
+    ]).to_csv(path, index=False)
+    return path
 
 
 def _profile_data_quality(
@@ -447,6 +557,7 @@ def run_multi(
     schema_path: str | None = None,
     confirmed_schema_path: str | None = None,
     fact_table: str | None = None,
+    profiling_minimal: bool = False,
 ) -> dict:
     """Multi-table mode: N data files + optional schema -> schema findings + verdict.
     When schema_path is omitted, table schemas and relationships are inferred from data.
@@ -468,7 +579,7 @@ def run_multi(
             str(path),
             out,
             artifact_prefix=table_name,
-            profiling_minimal=False,
+            profiling_minimal=profiling_minimal,
         )
         table_findings[table_name] = findings
 
@@ -531,6 +642,7 @@ def run_multi(
     schema_gate_path = out / "schema_gate.json"
     graph_path = out / "relationship_graph.json"
     cross_table_path = out / "cross_table_analysis.json"
+    cross_table_correlations_path = _write_cross_table_correlations_csv(cross_table_analysis, out)
     verdict_path = out / "dataset_verdict.json"
     report_path = out / "summary_report.md"
     l4_report_path = out / "l4_report.md"
@@ -542,10 +654,14 @@ def run_multi(
         schema_for_output,
         cross_table_analysis,
     )
+    profile_fragment = (
+        _write_multi_ydata_profiles(cross_tables, out, minimal=profiling_minimal)
+        + _cross_table_correlation_fragment(cross_table_analysis)
+    )
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
-        _write_multi_ydata_profiles(cross_tables, out, minimal=True),
+        profile_fragment,
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
     )
@@ -573,6 +689,7 @@ def run_multi(
     print(f"schema_gate.json                → {schema_gate_path}")
     print(f"relationship_graph.json         → {graph_path}")
     print(f"cross_table_analysis.json       → {cross_table_path}")
+    print(f"cross_table_correlations.csv    → {cross_table_correlations_path}")
     print(f"dataset_verdict.json            → {verdict_path}")
     print(f"summary_report.md               → {report_path}")
     print(f"l4_report.md                    → {l4_report_path}")
@@ -585,6 +702,7 @@ def run_multi(
         "schema_gate_path": str(schema_gate_path),
         "graph_path": str(graph_path),
         "cross_table_path": str(cross_table_path),
+        "cross_table_correlations_path": str(cross_table_correlations_path),
         "verdict_path": str(verdict_path),
         "report_path": str(report_path),
         "l4_report_path": str(l4_report_path),
@@ -598,7 +716,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("Usage: python run_pipeline.py <data_path> [out_dir] [schema.dbml|schema.sql]")
         print("       Supported data: .csv, .xlsx, .xls, .parquet, .json, .jsonl, .ndjson")
-        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--confirmed-schema <file.json>] [--fact-table <table>] [--out <dir>]")
+        print("       python run_pipeline.py --multi <data1> <data2> ... [--schema <file.dbml|file.sql>] [--confirmed-schema <file.json>] [--fact-table <table>] [--minimal-profile] [--out <dir>]")
         sys.exit(1)
 
     if sys.argv[1] == "--multi":
@@ -623,11 +741,22 @@ if __name__ == "__main__":
             fact_idx = args.index("--fact-table")
             fact_table_arg = args[fact_idx + 1]
             del args[fact_idx:fact_idx + 2]
+        profiling_minimal_arg = False
+        if "--minimal-profile" in args:
+            profiling_minimal_arg = True
+            args.remove("--minimal-profile")
         data_args = args
         if len(data_args) < 2:
             print("Error: --multi mode requires at least two data files")
             sys.exit(1)
-        run_multi(data_args, out_arg, schema_arg, confirmed_schema_arg, fact_table_arg)
+        run_multi(
+            data_args,
+            out_arg,
+            schema_arg,
+            confirmed_schema_arg,
+            fact_table_arg,
+            profiling_minimal=profiling_minimal_arg,
+        )
     else:
         data_arg = sys.argv[1]
         out_arg = sys.argv[2] if len(sys.argv) > 2 else "output"

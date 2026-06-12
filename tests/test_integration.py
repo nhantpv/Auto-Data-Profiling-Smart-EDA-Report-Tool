@@ -272,6 +272,7 @@ class TestMultiTableIntegration:
         assert Path(result["schema_gate_path"]).exists()
         assert Path(result["graph_path"]).exists()
         assert Path(result["cross_table_path"]).exists()
+        assert Path(result["cross_table_correlations_path"]).exists()
         assert Path(result["verdict_path"]).exists()
         assert Path(result["report_path"]).exists()
         assert Path(result["l4_report_path"]).exists()
@@ -292,6 +293,9 @@ class TestMultiTableIntegration:
         html_report = Path(result["html_report_path"]).read_text(encoding="utf-8")
         assert "No generated PNG charts were attached." not in html_report
         assert "class=\"chart-card\"" in html_report
+        assert "Relationship-Aware Correlations" in html_report
+        corr_csv = Path(result["cross_table_correlations_path"]).read_text(encoding="utf-8")
+        assert "coefficient" in corr_csv
         cross = json.loads(Path(result["cross_table_path"]).read_text())
         assert cross["schema_version"] == "cross_table_analysis_v1"
         assert cross["status"] == "completed"
