@@ -822,6 +822,215 @@ h3 {
   background: var(--surface);
 }
 
+.cluster-summary-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  background: var(--surface);
+}
+
+.cluster-summary-card::before {
+  content: "";
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--info);
+}
+
+.cluster-critical::before {
+  background: linear-gradient(90deg, var(--danger), #c45a08);
+}
+
+.cluster-high::before {
+  background: linear-gradient(90deg, #c45a08, var(--warn));
+}
+
+.cluster-warn::before {
+  background: var(--warn);
+}
+
+.cluster-info::before {
+  background: var(--info);
+}
+
+.cluster-summary-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cluster-summary-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.cluster-kicker {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.cluster-summary-header h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+
+.cluster-summary-header p {
+  max-width: 850px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.cluster-severity {
+  white-space: nowrap;
+}
+
+.cluster-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--border);
+}
+
+.cluster-metrics div {
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  background: var(--surface-soft);
+}
+
+.cluster-metrics span,
+.cluster-scope-row > span,
+.cluster-observations > span {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.cluster-metrics strong {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cluster-scope-row {
+  display: grid;
+  gap: 8px;
+}
+
+.cluster-scope-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.cluster-observations {
+  display: grid;
+  gap: 8px;
+}
+
+.cluster-observations ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cluster-observations li {
+  position: relative;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px 9px 32px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+}
+
+.cluster-observations li::before {
+  content: "";
+  position: absolute;
+  left: 12px;
+  top: 17px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--danger);
+}
+
+.cluster-trace {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 12px;
+}
+
+.cluster-trace span,
+.cluster-trace strong {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 9px;
+  background: var(--surface-inset);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.cluster-trace strong {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.analyst-detail {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
+}
+
+.analyst-detail summary {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.analyst-detail summary:hover {
+  background: var(--surface-inset);
+}
+
+.analyst-detail summary:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.analyst-detail-body {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  padding: 14px;
+}
+
 .analyst-section-header {
   display: flex;
   align-items: flex-start;
@@ -1390,8 +1599,15 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .cluster-summary-header,
+  .cluster-trace {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .stats-kpi-grid,
   .agent-status-grid,
+  .cluster-metrics,
   .stats-diagnostic-grid {
     grid-template-columns: 1fr 1fr;
   }
@@ -1413,6 +1629,7 @@ tr:last-child td {
 
   .stats-kpi-grid,
   .agent-status-grid,
+  .cluster-metrics,
   .stats-diagnostic-grid {
     grid-template-columns: 1fr;
   }

@@ -494,6 +494,16 @@ def _agent_meta(detail: dict | None, fallback_label: str) -> str:
     return f"{provider} · guardrail {status} · {fallback} · retries {retry_count}"
 
 
+def _agent_trace_meta(detail: dict | None) -> str:
+    if detail is None:
+        return "guardrail status unavailable"
+    provider = str(detail.get("provider") or "unknown")
+    retry_count = detail.get("retry_count", 0)
+    used_fallback = bool(detail.get("used_fallback"))
+    mode = "fallback" if used_fallback else "llm"
+    return f"{provider} · {mode} · retries {retry_count}"
+
+
 def _editor_card(label: str, value: str | None, tone: str) -> str:
     if not value:
         return ""
@@ -501,6 +511,214 @@ def _editor_card(label: str, value: str | None, tone: str) -> str:
         f"<article class=\"editor-insight-card editor-insight-{html.escape(tone)}\">"
         f"<span>{html.escape(label)}</span>"
         f"<p>{_inline_markdown(value)}</p>"
+        "</article>"
+    )
+
+
+_ISSUE_COPY = {
+    "PK_DUPLICATE": (
+        "Primary-key integrity blocker",
+        "Primary-key values are duplicated, so entity identity and downstream joins are unsafe until deduped.",
+    ),
+    "ORPHAN_FOREIGN_KEY": (
+        "Relationship integrity blocker",
+        "Foreign-key values point to missing parent records; joins can drop rows or attach the wrong context.",
+    ),
+    "NON_UNIQUE_PARENT_PK": (
+        "Safe-join blocker",
+        "Parent keys are not unique, so a join can multiply rows and bias cross-table analysis.",
+    ),
+    "PK_NULL": (
+        "Entity identity blocker",
+        "Primary-key nulls mean some records cannot be uniquely addressed or reliably joined.",
+    ),
+    "MISSINGNESS": (
+        "Completeness risk",
+        "Missing values reduce feature reliability and should be handled before modeling or reporting.",
+    ),
+    "DUPLICATE": (
+        "Row duplication risk",
+        "Duplicate rows can inflate counts, aggregates, and model training signals.",
+    ),
+}
+
+
+def _cluster_copy(issue_type: str) -> tuple[str, str]:
+    return _ISSUE_COPY.get(
+        issue_type,
+        (
+            "Quality signal",
+            "This cluster contains evidence that should be reviewed before using the dataset.",
+        ),
+    )
+
+
+def _issue_rank(severity: str | None) -> int:
+    return {"INFO": 0, "WARN": 1, "HIGH": 2, "CRITICAL": 3}.get(severity or "INFO", 0)
+
+
+def _cluster_issues(verdict: DatasetVerdict, cluster_type: str) -> list[IssueSummary]:
+    return [issue for issue in verdict.top_issues if issue.issue_type == cluster_type]
+
+
+def _cluster_max_severity(issues: list[IssueSummary], markdown: str) -> str:
+    if issues:
+        return max((issue.effective_severity.value for issue in issues), key=_issue_rank)
+    match = re.search(r"\b(CRITICAL|HIGH|WARN|INFO)\b", markdown)
+    return match.group(1) if match else "INFO"
+
+
+def _cluster_affected_count(issues: list[IssueSummary]) -> int | None:
+    if not issues:
+        return None
+    return sum(issue.affected_count for issue in issues)
+
+
+def _cluster_count_from_markdown(markdown: str) -> int | None:
+    patterns = (
+        r"\btotal\s+count(?:\s+of\s+issues)?[^\d]+(\d+)\b",
+        r"\bcount(?:\s+of\s+issues)?[^\d]+(\d+)\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, markdown, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _cluster_scopes(issues: list[IssueSummary], markdown: str) -> list[str]:
+    scopes = [_scope_for_issue(issue) for issue in issues if _scope_for_issue(issue) != "dataset"]
+    if not scopes:
+        scopes = _QUALIFIED_REFERENCE_FROM_TEXT.findall(markdown)
+    unique_scopes: list[str] = []
+    for scope in scopes:
+        if scope not in unique_scopes:
+            unique_scopes.append(scope)
+    return unique_scopes[:5]
+
+
+_QUALIFIED_REFERENCE_FROM_TEXT = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b")
+
+
+def _important_observations(issues: list[IssueSummary], markdown: str) -> list[str]:
+    observations: list[str] = []
+    seen: set[str] = set()
+    for issue in issues[:3]:
+        scope = _scope_for_issue(issue)
+        text = f"**{issue.effective_severity.value}** on `{scope}`: {issue.rationale}"
+        plain_key = re.sub(r"\s+", " ", text.replace("`", "")).strip().lower()
+        if plain_key in seen:
+            continue
+        seen.add(plain_key)
+        observations.append(text)
+    if observations:
+        return observations
+
+    skip_prefixes = (
+        "issue type",
+        "issue_type",
+        "total count",
+        "count of issues",
+        "maximum severity",
+        "max_severity",
+        "affected columns",
+        "severity",
+        "affected count",
+        "affected column",
+        "data quality dimension",
+        "provenance",
+        "finding id",
+        "finding_id",
+        "error type",
+    )
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip().lstrip("-").strip()
+        plain = line.replace("`", "")
+        if not plain or plain.startswith("#"):
+            continue
+        if plain.lower().startswith(skip_prefixes):
+            continue
+        if any(keyword in plain.lower() for keyword in ("duplicate", "missing", "null", "reference", "join", "bias")):
+            if plain.lower().startswith("description:") and ":" in line:
+                line = line.split(":", 1)[1].strip()
+                plain = line.replace("`", "")
+            plain_key = re.sub(r"\s+", " ", plain).strip().lower()
+            if plain_key in seen:
+                continue
+            seen.add(plain_key)
+            observations.append(line)
+        if len(observations) >= 3:
+            break
+    return observations[:3]
+
+
+def _cluster_evidence_card(
+    output: object,
+    verdict: DatasetVerdict,
+    detail: dict | None,
+    status: str,
+) -> str:
+    cluster_type = str(getattr(output, "cluster_type"))
+    markdown = str(getattr(output, "markdown"))
+    issues = _cluster_issues(verdict, cluster_type)
+    severity = _cluster_max_severity(issues, markdown)
+    severity_key = _severity_key(severity)
+    affected_count = _cluster_affected_count(issues)
+    scopes = _cluster_scopes(issues, markdown)
+    kicker, statement = _cluster_copy(cluster_type)
+    observations = _important_observations(issues, markdown)
+    finding_count = len(issues) if issues else _cluster_count_from_markdown(markdown)
+
+    metrics = [
+        ("Severity", severity),
+        ("Findings", _format_int(finding_count) if finding_count is not None else "See notes"),
+        ("Affected rows", _format_int(affected_count) if affected_count is not None else "See notes"),
+    ]
+    metric_html = "".join(
+        "<div><span>{label}</span><strong>{value}</strong></div>".format(
+            label=html.escape(label),
+            value=html.escape(value),
+        )
+        for label, value in metrics
+    )
+    scopes_html = "".join(f"<code>{html.escape(scope)}</code>" for scope in scopes)
+    if not scopes_html:
+        scopes_html = "<span class=\"muted-copy\">No scoped column was reported.</span>"
+    observations_html = "".join(f"<li>{_inline_markdown(item)}</li>" for item in observations)
+    if not observations_html:
+        observations_html = "<li>No concise observation was available; open the full notes for details.</li>"
+
+    return (
+        f"<article class=\"analyst-section guardrail-{html.escape(status)}\">"
+        f"<div class=\"cluster-summary-card cluster-{html.escape(severity_key)}\">"
+        "<div class=\"cluster-summary-header\">"
+        "<div>"
+        f"<span class=\"cluster-kicker\">{html.escape(kicker)}</span>"
+        f"<h3>{html.escape(cluster_type)}</h3>"
+        f"<p>{html.escape(statement)}</p>"
+        "</div>"
+        f"<span class=\"cluster-severity severity-{html.escape(severity)}\">{html.escape(severity)}</span>"
+        "</div>"
+        f"<div class=\"cluster-metrics\">{metric_html}</div>"
+        "<div class=\"cluster-scope-row\">"
+        "<span>Scope</span>"
+        f"<div>{scopes_html}</div>"
+        "</div>"
+        "<div class=\"cluster-observations\">"
+        "<span>What to notice</span>"
+        f"<ul>{observations_html}</ul>"
+        "</div>"
+        "<div class=\"cluster-trace\">"
+        f"<span>{html.escape(_agent_trace_meta(detail))}</span>"
+        f"<strong>guardrail {html.escape(status)}</strong>"
+        "</div>"
+        "<details class=\"analyst-detail\">"
+        "<summary>View full analyst notes</summary>"
+        "<div class=\"analyst-detail-body\">"
+        f"{_markdown_to_html(markdown)}"
+        "</div>"
+        "</details>"
+        "</div>"
         "</article>"
     )
 
@@ -545,20 +763,7 @@ def _agent_content(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
         for output in result.analyst_outputs:
             status = "passed" if output.guardrail_passed else "failed"
             detail = details.get(output.cluster_type)
-            sections.append(
-                f"<article class=\"analyst-section guardrail-{status}\">"
-                "<div class=\"analyst-section-header\">"
-                "<div>"
-                f"<span class=\"analyst-label\">{html.escape(output.cluster_type)}</span>"
-                f"<div class=\"agent-meta\">{html.escape(_agent_meta(detail, f'guardrail {status}'))}</div>"
-                "</div>"
-                f"<span class=\"guardrail-mini guardrail-{status}\">guardrail {status}</span>"
-                "</div>"
-            )
-            sections.append("<div class=\"analyst-body\">")
-            sections.append(_markdown_to_html(output.markdown))
-            sections.append("</div>")
-            sections.append("</article>")
+            sections.append(_cluster_evidence_card(output, verdict, detail, status))
         sections.append("</section>")
 
     if result.appendix_html:

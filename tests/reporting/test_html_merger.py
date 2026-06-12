@@ -3,7 +3,9 @@ from ontology.models import (
     DatasetMeta,
     DatasetVerdict,
     EditorOutput,
+    IssueSummary,
     MultiAgentResult,
+    Severity,
     Verdict,
     VerdictSummary,
 )
@@ -22,6 +24,17 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
         verdict=Verdict.WARN,
         verdict_rationale="Needs review",
         summary=VerdictSummary(total_issues=1, warn=1),
+        top_issues=[
+            IssueSummary(
+                source="data_quality",
+                issue_type="MISSINGNESS",
+                effective_severity=Severity.HIGH,
+                severity=Severity.HIGH,
+                affected_column="age",
+                affected_count=2,
+                rationale="Column age has missing values",
+            )
+        ],
     )
     result = MultiAgentResult(
         analyst_outputs=[AnalystOutput(cluster_type="MISSINGNESS", markdown="### `MISSINGNESS`\n\nOK")],
@@ -56,7 +69,7 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     assert "Data Science Report" in html
     assert "Data Science Brief" in html
     assert "Immediate Attention" in html
-    assert "No ranked issue details were included." in html
+    assert "Issues that should drive the next action" in html
     assert "Executive Interpretation" in html
     assert "What the data scientist should notice first" in html
     assert "Evidence Review" in html
@@ -72,5 +85,12 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     assert "openai-editor" in html
     assert "MISSINGNESS" in html
     assert "<code>MISSINGNESS</code>" in html
+    assert "cluster-summary-card" in html
+    assert "Completeness risk" in html
+    assert "Affected rows" in html
+    assert "Column age has missing values" in html
+    assert "View full analyst notes" in html
+    assert "openai-analyst · llm · retries 0" in html
+    assert "openai-analyst · guardrail passed · llm" not in html
     assert "insight-list" in html
     assert "&lt;h1&gt;YData&lt;/h1&gt;" in html
