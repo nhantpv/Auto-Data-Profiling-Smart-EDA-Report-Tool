@@ -25,7 +25,7 @@ TEMPLATE_PLACEHOLDERS = [
     "{p_cells_missing}",     # "12.3%"
     "{ai_analysis_content}", # HTML string (Editor + Analysts + Appendix)
     "{statistical_overview}", # HTML string (Data Science-style profile overview)
-    "{ydata_escaped}",       # HTML-escaped ydata string
+    "{profile_viewer_html}", # HTML string (links/cards for standalone profiles)
     "{guardrail_status}",    # "passed" | "partial" | "failed"
     "{provider}",            # "multi-agent" | "deterministic"
     "{model_info}",          # string
@@ -52,7 +52,7 @@ def _load_template() -> str:
 <p>{verdict_rationale}</p>
 <div>{ai_analysis_content}</div>
 <hr>
-<iframe srcdoc="{ydata_escaped}" style="width:100%;height:90vh;border:none;"></iframe>
+<div>{profile_viewer_html}</div>
 <footer><p>Guardrail: {guardrail_status} · {provider} · {model_info}</p></footer>
 </body>
 </html>"""
@@ -201,6 +201,12 @@ def _bar_width(value: float | None) -> str:
     return f"{max(0.0, min(float(value), 1.0)) * 100:.1f}%"
 
 
+def _bounded_pct(value: float | None) -> float:
+    if value is None:
+        return 0.0
+    return max(0.0, min(float(value), 1.0)) * 100
+
+
 def _shape_widths(rows: int, columns: int) -> tuple[str, str]:
     row_scale = math.log10(max(rows, 0) + 1)
     column_scale = math.log10(max(columns, 0) + 1)
@@ -235,6 +241,46 @@ def _severity_bars_html(verdict: DatasetVerdict) -> str:
     return "".join(items)
 
 
+def _severity_stack_html(verdict: DatasetVerdict) -> str:
+    total = max(1, verdict.summary.total_issues)
+    rows = [
+        ("critical", "Critical", verdict.summary.critical),
+        ("high", "High", verdict.summary.high),
+        ("warn", "Warn", verdict.summary.warn),
+        ("info", "Info", verdict.summary.info),
+    ]
+    segments = []
+    legend = []
+    for key, label, count in rows:
+        width = 0 if count == 0 else max(4.0, (count / total) * 100)
+        segments.append(
+            "<span class=\"severity-stack-segment severity-stack-{key}\" "
+            "style=\"--stack-width: {width}%\" title=\"{label}: {count}\"></span>".format(
+                key=html.escape(key),
+                width=f"{width:.1f}",
+                label=html.escape(label),
+                count=_format_int(count),
+            )
+        )
+        legend.append(
+            "<span><i class=\"severity-dot severity-dot-{key}\"></i>{label} <strong>{count}</strong></span>".format(
+                key=html.escape(key),
+                label=html.escape(label),
+                count=_format_int(count),
+            )
+        )
+    if verdict.summary.total_issues == 0:
+        segments = ["<span class=\"severity-stack-segment severity-stack-ready\" style=\"--stack-width: 100%\"></span>"]
+    return (
+        "<div class=\"severity-stack\" aria-label=\"Severity stack\">"
+        f"{''.join(segments)}"
+        "</div>"
+        "<div class=\"severity-stack-legend\">"
+        f"{''.join(legend)}"
+        "</div>"
+    )
+
+
 def _severity_key(value: str | None) -> str:
     normalized = (value or "INFO").lower()
     if normalized not in {"critical", "high", "warn", "info"}:
@@ -254,6 +300,157 @@ def _scope_for_issue(issue: IssueSummary) -> str:
     if issue.affected_table and issue.affected_column:
         return f"{issue.affected_table}.{issue.affected_column}"
     return issue.affected_column or issue.affected_table or "dataset"
+
+
+def _risk_percent(verdict: DatasetVerdict) -> float:
+    if verdict.risk_score is not None:
+        return max(0.0, min(float(verdict.risk_score) * 100, 100.0))
+    total = verdict.summary.total_issues
+    if total == 0:
+        return 0.0
+    weighted = (
+        verdict.summary.critical * 4
+        + verdict.summary.high * 3
+        + verdict.summary.warn * 2
+        + verdict.summary.info
+    )
+    return (weighted / max(total * 4, 1)) * 100
+
+
+def _issue_impact_bars(verdict: DatasetVerdict) -> str:
+    if not verdict.top_issues:
+        return "<p class=\"muted-copy\">No ranked issues were available for an impact chart.</p>"
+    max_affected = max(1, *(issue.affected_count for issue in verdict.top_issues))
+    rows = []
+    for issue in verdict.top_issues[:6]:
+        width = max(3.0, (issue.affected_count / max_affected) * 100) if issue.affected_count else 0
+        rows.append(
+            "<div class=\"impact-row impact-{severity}\" style=\"--impact-width: {width}%\">"
+            "<div><strong>{issue_type}</strong><span>{scope}</span></div>"
+            "<em>{affected}</em>"
+            "</div>".format(
+                severity=html.escape(_severity_key(issue.effective_severity.value)),
+                width=f"{width:.1f}",
+                issue_type=html.escape(issue.issue_type),
+                scope=html.escape(_scope_for_issue(issue)),
+                affected=_format_int(issue.affected_count),
+            )
+        )
+    return "".join(rows)
+
+
+_CHART_COPY = {
+    "missingness_bar": ("Missingness Bar", "Column-level completeness scan."),
+    "dtype_distribution": ("Type Donut", "Data type mix across columns."),
+    "numeric_distributions": ("Histogram Grid", "Numeric distribution snapshots."),
+    "numeric_boxplot": ("Box Plot", "Standardized numeric spread."),
+    "correlation_heatmap": ("Correlation Heatmap", "Pairwise numeric association view."),
+    "categorical_top_values": ("Category Bar", "Most frequent values in a categorical field."),
+}
+
+
+def _chart_copy(chart_key: str) -> tuple[str, str, str]:
+    table_name = ""
+    normalized_key = chart_key
+    if "." in chart_key:
+        table_name, normalized_key = chart_key.rsplit(".", 1)
+    title, description = _CHART_COPY.get(
+        normalized_key,
+        (normalized_key.replace("_", " ").title(), "Generated quick-look visualization."),
+    )
+    return table_name, title, description
+
+
+def _overview_chart_gallery(verdict: DatasetVerdict) -> str:
+    charts = verdict.dataset_meta.overview_charts
+    if not charts:
+        return (
+            "<div class=\"chart-gallery-empty\">"
+            "<strong>No generated PNG charts were attached.</strong>"
+            "<p>Verdict-level visual summaries are still shown above; rerun the pipeline to generate chart artifacts.</p>"
+            "</div>"
+        )
+
+    preferred = [
+        "missingness_bar",
+        "dtype_distribution",
+        "numeric_distributions",
+        "numeric_boxplot",
+        "correlation_heatmap",
+        "categorical_top_values",
+    ]
+
+    def sort_key(item: tuple[str, str]) -> tuple[int, str]:
+        key, _path = item
+        normalized = key.rsplit(".", 1)[-1]
+        try:
+            rank = preferred.index(normalized)
+        except ValueError:
+            rank = len(preferred)
+        return rank, key
+
+    cards = []
+    for chart_key, chart_path in sorted(charts.items(), key=sort_key)[:18]:
+        table_name, title, description = _chart_copy(chart_key)
+        table_badge = f"<span>{html.escape(table_name)}</span>" if table_name else ""
+        cards.append(
+            "<article class=\"chart-card\">"
+            "<div class=\"chart-card-copy\">"
+            f"{table_badge}"
+            f"<strong>{html.escape(title)}</strong>"
+            f"<p>{html.escape(description)}</p>"
+            "</div>"
+            "<div class=\"chart-frame\">"
+            f"<img src=\"{html.escape(chart_path, quote=True)}\" alt=\"{html.escape(title, quote=True)}\" loading=\"lazy\">"
+            "</div>"
+            "</article>"
+        )
+    return "<div class=\"chart-gallery\">" + "".join(cards) + "</div>"
+
+
+def _visual_overview(verdict: DatasetVerdict) -> str:
+    meta = verdict.dataset_meta
+    risk = _risk_percent(verdict)
+    missing = _bounded_pct(meta.p_cells_missing)
+    duplicates = _bounded_pct(meta.p_duplicates)
+    return f"""
+<section class="visual-overview">
+  <div class="section-heading">
+    <p class="eyebrow">Visual Data Science Overview</p>
+    <h2>Charts to inspect immediately</h2>
+    <p class="muted-copy">Fast visual triage before opening the full statistical profile.</p>
+  </div>
+  <div class="visual-grid">
+    <article class="visual-card visual-risk-card">
+      <span>Heuristic risk</span>
+      <div class="risk-donut" style="--risk-angle: {risk * 3.6:.1f}deg"><strong>{risk:.1f}%</strong></div>
+      <p>Risk score is derived from the severity-weighted findings density.</p>
+    </article>
+    <article class="visual-card">
+      <span>Completeness and duplicates</span>
+      <div class="dual-meter">
+        <div style="--meter-width: {missing:.1f}%"><label>Missing cells</label><i></i><strong>{missing:.1f}%</strong></div>
+        <div style="--meter-width: {duplicates:.1f}%"><label>Duplicate rows</label><i></i><strong>{duplicates:.1f}%</strong></div>
+      </div>
+    </article>
+    <article class="visual-card visual-stack-card">
+      <span>Severity mix</span>
+      {_severity_stack_html(verdict)}
+    </article>
+    <article class="visual-card visual-impact-card">
+      <span>Issue impact bars</span>
+      {_issue_impact_bars(verdict)}
+    </article>
+  </div>
+  <div class="generated-chart-section">
+    <div class="section-heading">
+      <p class="eyebrow">Generated Data Charts</p>
+      <h2>Profile visuals attached to this run</h2>
+    </div>
+    {_overview_chart_gallery(verdict)}
+  </div>
+</section>
+"""
 
 
 def _science_brief(verdict: DatasetVerdict) -> str:
@@ -400,6 +597,29 @@ def _statistical_overview(verdict: DatasetVerdict) -> str:
   </div>
 </div>
 """
+
+
+def _profile_viewer_html(ydata_html: str) -> str:
+    """Render statistical profile access without nesting full reports in this report."""
+    stripped = ydata_html.strip()
+    if stripped.startswith("<!-- smart-eda-profile-fragment -->"):
+        return stripped
+    return (
+        "<section class=\"profile-viewer profile-export-panel\" aria-label=\"Statistical profile export\">"
+        "<div class=\"profile-viewer-header\">"
+        "<div><p class=\"eyebrow\">Profile Export</p><h2>Standalone Statistical Profile</h2></div>"
+        "<span class=\"profile-badge\">opens separately</span>"
+        "</div>"
+        "<div class=\"profile-export-body\">"
+        "<p>The statistical profile is kept outside the Smart EDA report to avoid nested reports. "
+        "This run used an inline legacy profile payload; regenerate through the pipeline to create standalone profile files.</p>"
+        "<details class=\"legacy-profile-detail\">"
+        "<summary>View legacy embedded profile</summary>"
+        f"<iframe srcdoc=\"{html.escape(ydata_html, quote=True)}\" class=\"ydata-frame\" title=\"Legacy statistical profile\"></iframe>"
+        "</details>"
+        "</div>"
+        "</section>"
+    )
 
 
 def _agent_detail_lookup(result: MultiAgentResult) -> dict[str, dict]:
@@ -726,6 +946,7 @@ def _cluster_evidence_card(
 def _agent_content(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
     sections: list[str] = []
     sections.append(_science_brief(verdict))
+    sections.append(_visual_overview(verdict))
     sections.append(_issue_spotlight(verdict))
 
     details = _agent_detail_lookup(result)
@@ -821,7 +1042,7 @@ def merge_to_tabbed_html(
         p_cells_missing=html.escape(f"{verdict.dataset_meta.p_cells_missing * 100:.1f}%"),
         ai_analysis_content=_agent_content(multi_agent_result, verdict),
         statistical_overview=_statistical_overview(verdict),
-        ydata_escaped=html.escape(ydata_html, quote=True),
+        profile_viewer_html=_profile_viewer_html(ydata_html),
         guardrail_status=html.escape(guardrail_status),
         provider=html.escape(provider),
         model_info=html.escape(model_info),

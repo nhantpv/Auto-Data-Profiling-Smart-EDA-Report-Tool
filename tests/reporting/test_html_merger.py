@@ -20,6 +20,12 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
             n_var=3,
             memory_size=0,
             p_cells_missing=0.25,
+            n_duplicates=1,
+            p_duplicates=0.0833,
+            overview_charts={
+                "missingness_bar": "data__overview_missingness_bar.png",
+                "correlation_heatmap": "data__overview_correlation_heatmap.png",
+            },
         ),
         verdict=Verdict.WARN,
         verdict_rationale="Needs review",
@@ -62,12 +68,27 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
         used_fallback=True,
     )
 
-    html = merge_to_tabbed_html(result, verdict, "<h1>YData</h1>", guardrail_status="passed")
+    profile_fragment = (
+        "<!-- smart-eda-profile-fragment -->"
+        "<section class=\"profile-viewer profile-export-panel\">"
+        "<div class=\"profile-export-grid\">"
+        "<article class=\"profile-export-card\"><strong>statistical_profile.html</strong>"
+        "<a href=\"statistical_profile.html\">Open profile</a></article>"
+        "</div></section>"
+    )
+    html = merge_to_tabbed_html(result, verdict, profile_fragment, guardrail_status="passed")
 
     assert "tab-ai" in html
     assert "tab-stats" in html
     assert "Data Science Report" in html
     assert "Data Science Brief" in html
+    assert "Visual Data Science Overview" in html
+    assert "Charts to inspect immediately" in html
+    assert "Generated Data Charts" in html
+    assert "Missingness Bar" in html
+    assert "Correlation Heatmap" in html
+    assert "data__overview_missingness_bar.png" in html
+    assert "data__overview_correlation_heatmap.png" in html
     assert "Immediate Attention" in html
     assert "Issues that should drive the next action" in html
     assert "Executive Interpretation" in html
@@ -79,6 +100,10 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     assert "Completeness" in html
     assert "Severity Distribution" in html
     assert "profile-viewer" in html
+    assert "profile-export-grid" in html
+    assert "statistical_profile.html" in html
+    assert "Open profile" in html
+    assert "srcdoc=" not in html
     assert "LLM Agent Review" in html
     assert "Guardrailed L4 Comments" in html
     assert "openai-analyst" in html
@@ -93,4 +118,24 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     assert "openai-analyst · llm · retries 0" in html
     assert "openai-analyst · guardrail passed · llm" not in html
     assert "insight-list" in html
+
+
+def test_merge_to_tabbed_html_keeps_legacy_ydata_collapsed():
+    verdict = DatasetVerdict(
+        dataset_meta=DatasetMeta(
+            file_name="data.csv",
+            n=12,
+            n_var=3,
+            memory_size=0,
+            p_cells_missing=0.25,
+        ),
+        verdict=Verdict.WARN,
+        verdict_rationale="Needs review",
+        summary=VerdictSummary(total_issues=1, warn=1),
+    )
+    result = MultiAgentResult(editor_output=EditorOutput(executive_summary="Dataset has 12 rows."))
+
+    html = merge_to_tabbed_html(result, verdict, "<h1>YData</h1>", guardrail_status="passed")
+
+    assert "View legacy embedded profile" in html
     assert "&lt;h1&gt;YData&lt;/h1&gt;" in html

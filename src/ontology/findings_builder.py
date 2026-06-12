@@ -43,7 +43,7 @@ def _write_csv_artifact(df: pd.DataFrame, artifact_dir: str | Path | None, file_
     out.mkdir(parents=True, exist_ok=True)
     path = out / file_name
     df.to_csv(path, index=False)
-    return str(path)
+    return file_name
 
 
 def _outlier_rows(

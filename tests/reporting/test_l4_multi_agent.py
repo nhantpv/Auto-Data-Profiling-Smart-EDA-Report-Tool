@@ -89,6 +89,9 @@ def test_multi_agent_l4_deterministic_fallback_passes_guardrail(monkeypatch):
     text, guardrail, result = generate_multi_agent_report(findings, verdict)
 
     assert "L4 Guarded EDA Report" in text
+    assert "Evidence Snapshot" in text
+    assert "Interpretation" in text
+    assert "Suggested Follow-up" in text
     assert guardrail.status == "passed"
     assert result.analyst_outputs[0].guardrail_passed is True
     assert guardrail.agents

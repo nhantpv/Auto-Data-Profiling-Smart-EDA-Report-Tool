@@ -569,6 +569,28 @@ Table students {
         assert ("orders", "user_id", "products", "id") not in keys
         assert ("users", "id", "products", "id") not in keys
 
+    def test_value_overlap_without_domain_name_does_not_infer_relationship(self, tmp_path):
+        products_path = tmp_path / "products.csv"
+        details_path = tmp_path / "order_details.csv"
+        pd.DataFrame({
+            "product_id": [1, 2, 3],
+            "name": ["A", "B", "C"],
+        }).to_csv(products_path, index=False)
+        pd.DataFrame({
+            "order_id": [100, 101, 102],
+            "product_id": [1, 2, 3],
+            "quantity": [1, 2, 3],
+        }).to_csv(details_path, index=False)
+
+        findings = validate_schema_multi([str(products_path), str(details_path)], schema_path=None)
+        keys = {
+            (r.child_table, r.child_column, r.parent_table, r.parent_column)
+            for r in findings.relationships
+        }
+
+        assert ("order_details", "product_id", "products", "product_id") in keys
+        assert ("order_details", "quantity", "products", "product_id") not in keys
+
     def test_inferred_primary_key_still_reports_duplicate_and_null(self, tmp_path):
         schools_path = tmp_path / "schools.csv"
         classes_path = tmp_path / "classes.csv"

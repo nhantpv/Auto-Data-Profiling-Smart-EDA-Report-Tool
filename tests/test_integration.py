@@ -40,14 +40,15 @@ class TestFullPipeline:
         )
 
         # Step 5: Layer 3.5 — Attach diagnostic charts (PATCH 5c)
+        chart_dir = tmp_path / "charts"
         findings = attach_diagnostic_charts(
-            findings, df, anomalies, out_dir=str(tmp_path / "charts")
+            findings, df, anomalies, out_dir=str(chart_dir)
         )
         # If outliers detected, every OUTLIER_ENSEMBLE record must have diagnostic_chart set
         outlier_recs = [a for a in findings.anomalies if a.issue_type == "OUTLIER_ENSEMBLE"]
         for r in outlier_recs:
             assert r.diagnostic_chart is not None
-            assert Path(r.diagnostic_chart).exists()
+            assert (chart_dir / r.diagnostic_chart).exists()
 
         # Step 6: Export to JSON
         output_path = tmp_path / "data_quality_findings.json"
@@ -175,10 +176,14 @@ class TestSchemaIntegration:
         assert Path(result["guardrail_path"]).exists()
         assert "schema_path" not in result
         dq = json.loads(Path(result["dq_path"]).read_text())
+        overview_charts = dq["dataset_meta"]["overview_charts"]
+        assert overview_charts
+        for file_name in overview_charts.values():
+            assert (tmp_path / file_name).exists()
         outlier = next((a for a in dq["anomalies"] if a["issue_type"] == "OUTLIER_ENSEMBLE"), None)
         if outlier is not None:
             assert outlier["diagnostic_chart"]
-            assert Path(outlier["diagnostic_chart"]).exists()
+            assert (tmp_path / outlier["diagnostic_chart"]).exists()
 
     def test_pipeline_accepts_excel_input(self, clean_csv_path, tmp_path):
         import sys
@@ -278,9 +283,15 @@ class TestMultiTableIntegration:
         assert set(dq["tables"]) == {"users", "orders"}
         assert dq["tables"]["users"]["findings"]["dataset_meta"]["n"] == 3
         assert dq["tables"]["orders"]["findings"]["dataset_meta"]["n"] == 4
+        combined_charts = dq["combined_findings"]["dataset_meta"]["overview_charts"]
+        assert combined_charts
         v = json.loads(Path(result["verdict_path"]).read_text())
         assert v["verdict"] == "NOT_READY"
         assert v["summary"]["total_issues"] >= 1
+        assert v["dataset_meta"]["overview_charts"] == combined_charts
+        html_report = Path(result["html_report_path"]).read_text(encoding="utf-8")
+        assert "No generated PNG charts were attached." not in html_report
+        assert "class=\"chart-card\"" in html_report
         cross = json.loads(Path(result["cross_table_path"]).read_text())
         assert cross["schema_version"] == "cross_table_analysis_v1"
         assert cross["status"] == "completed"
