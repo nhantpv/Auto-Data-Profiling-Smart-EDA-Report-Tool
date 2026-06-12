@@ -374,6 +374,240 @@ h3 {
   display: none;
 }
 
+.section-heading {
+  display: grid;
+  gap: 6px;
+}
+
+.section-heading h2 {
+  margin: 0;
+}
+
+.muted-copy {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.science-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 16px;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  background: var(--surface);
+}
+
+.science-brief-NOT_READY {
+  border-color: rgba(180, 35, 24, 0.26);
+  background: linear-gradient(135deg, rgba(255, 240, 238, 0.92), var(--surface) 58%);
+}
+
+.science-brief-WARN {
+  border-color: rgba(180, 83, 9, 0.26);
+  background: linear-gradient(135deg, rgba(255, 246, 223, 0.92), var(--surface) 58%);
+}
+
+.science-brief-READY {
+  border-color: rgba(21, 128, 61, 0.24);
+  background: linear-gradient(135deg, rgba(237, 248, 239, 0.92), var(--surface) 58%);
+}
+
+.science-brief-copy {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+.science-brief-copy h2 {
+  max-width: 820px;
+  margin: 0;
+  font-size: clamp(26px, 4vw, 42px);
+  line-height: 1.06;
+}
+
+.science-brief-copy p {
+  max-width: 860px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+.science-brief-copy strong,
+.priority-card-body strong,
+.editor-insight-card strong,
+.analyst-body strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.science-scoreboard {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--border);
+}
+
+.science-score {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 94px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.science-score span,
+.editor-insight-card span,
+.analyst-label {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.science-score strong {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 28px;
+  font-variant-numeric: tabular-nums;
+}
+
+.science-score-critical strong {
+  color: var(--danger);
+}
+
+.science-score-high strong {
+  color: #c45a08;
+}
+
+.science-score-warn strong {
+  color: var(--warn);
+}
+
+.priority-spotlight {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  background: var(--surface-soft);
+}
+
+.priority-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.priority-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.priority-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--info);
+}
+
+.priority-critical::before {
+  background: var(--danger);
+}
+
+.priority-high::before {
+  background: #c45a08;
+}
+
+.priority-warn::before {
+  background: var(--warn);
+}
+
+.priority-info::before {
+  background: var(--info);
+}
+
+.priority-rank {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.priority-card-body {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.priority-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.priority-card-title span {
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.priority-high .priority-card-title span {
+  background: #fff0e2;
+  color: #c45a08;
+}
+
+.priority-warn .priority-card-title span {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.priority-info .priority-card-title span {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.priority-card-title strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.priority-card-body p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .llm-review-panel {
   display: grid;
   gap: 14px;
@@ -524,11 +758,55 @@ h3 {
 
 .editor-section {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
   padding: 18px;
   background: var(--surface-soft);
+}
+
+.editor-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.editor-insight-card {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.editor-insight-primary {
+  border-color: rgba(180, 35, 24, 0.25);
+  background: linear-gradient(180deg, rgba(255, 240, 238, 0.74), var(--surface));
+}
+
+.editor-insight-rationale {
+  border-color: rgba(180, 83, 9, 0.25);
+  background: linear-gradient(180deg, rgba(255, 246, 223, 0.64), var(--surface));
+}
+
+.editor-insight-cross {
+  border-color: rgba(51, 78, 159, 0.22);
+  background: linear-gradient(180deg, rgba(237, 242, 255, 0.72), var(--surface));
+}
+
+.editor-insight-priority {
+  border-color: rgba(15, 118, 110, 0.22);
+  background: linear-gradient(180deg, rgba(230, 244, 241, 0.76), var(--surface));
+}
+
+.editor-insight-card p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.65;
 }
 
 .analyst-sections {
@@ -539,8 +817,95 @@ h3 {
 .analyst-section {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 0;
+  overflow: hidden;
   background: var(--surface);
+}
+
+.analyst-section-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-soft);
+}
+
+.analyst-section-header > div {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.analyst-label {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.guardrail-mini {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 9px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.analyst-body {
+  padding: 16px;
+}
+
+.analyst-body h3,
+.analyst-body h4 {
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.analyst-body h3 {
+  font-size: 17px;
+}
+
+.analyst-body h4 {
+  font-size: 15px;
+}
+
+.insight-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.insight-list li {
+  position: relative;
+  min-height: 34px;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px 8px 30px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.insight-list li::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 16px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--brand);
 }
 
 .guardrail-failed {
@@ -970,7 +1335,10 @@ tr:last-child td {
   .verdict-READY,
   .verdict-WARN,
   .verdict-NOT_READY,
+  .science-brief,
   .llm-review-panel,
+  .priority-spotlight,
+  .editor-insight-card,
   .stats-overview {
     background: var(--surface);
   }
@@ -1011,6 +1379,15 @@ tr:last-child td {
 
   .tab-content {
     padding: 16px;
+  }
+
+  .science-brief,
+  .editor-insight-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .priority-grid {
+    grid-template-columns: 1fr;
   }
 
   .stats-kpi-grid,

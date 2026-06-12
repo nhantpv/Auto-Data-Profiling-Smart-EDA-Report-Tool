@@ -53,6 +53,14 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
 
     assert "tab-ai" in html
     assert "tab-stats" in html
+    assert "Data Science Report" in html
+    assert "Data Science Brief" in html
+    assert "Immediate Attention" in html
+    assert "No ranked issue details were included." in html
+    assert "Executive Interpretation" in html
+    assert "What the data scientist should notice first" in html
+    assert "Evidence Review" in html
+    assert "Guardrailed analyst notes" in html
     assert "Statistical Workbench" in html
     assert "Profile Diagnostics" in html
     assert "Completeness" in html
@@ -63,4 +71,6 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     assert "openai-analyst" in html
     assert "openai-editor" in html
     assert "MISSINGNESS" in html
+    assert "<code>MISSINGNESS</code>" in html
+    assert "insight-list" in html
     assert "&lt;h1&gt;YData&lt;/h1&gt;" in html

@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import html
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ontology.models import DatasetVerdict, MultiAgentResult
+from ontology.models import DatasetVerdict, IssueSummary, MultiAgentResult
 
 
 # Template placeholder keys — C tạo template phải có đúng các placeholders này
@@ -78,8 +79,30 @@ function showTab(id) {
 """
 
 
+_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_INLINE_STRONG_RE = re.compile(r"\*\*([^*]+)\*\*")
+
+
+def _inline_markdown(text: str) -> str:
+    """Safe inline Markdown for emphasis inside report copy."""
+    parts: list[str] = []
+    position = 0
+    for match in _INLINE_CODE_RE.finditer(text):
+        if match.start() > position:
+            plain = html.escape(text[position:match.start()])
+            plain = _INLINE_STRONG_RE.sub(r"<strong>\1</strong>", plain)
+            parts.append(plain)
+        parts.append(f"<code>{html.escape(match.group(1))}</code>")
+        position = match.end()
+    if position < len(text):
+        plain = html.escape(text[position:])
+        plain = _INLINE_STRONG_RE.sub(r"<strong>\1</strong>", plain)
+        parts.append(plain)
+    return "".join(parts)
+
+
 def _paragraph(text: str) -> str:
-    return f"<p>{html.escape(text)}</p>"
+    return f"<p>{_inline_markdown(text)}</p>"
 
 
 def _markdown_table(lines: list[str]) -> str:
@@ -93,13 +116,13 @@ def _markdown_table(lines: list[str]) -> str:
     head = rows[0]
     body = rows[1:]
     output = ["<table>", "<thead><tr>"]
-    output.extend(f"<th>{html.escape(cell)}</th>" for cell in head)
+    output.extend(f"<th>{_inline_markdown(cell)}</th>" for cell in head)
     output.append("</tr></thead>")
     if body:
         output.append("<tbody>")
         for row in body:
             output.append("<tr>")
-            output.extend(f"<td>{html.escape(cell)}</td>" for cell in row)
+            output.extend(f"<td>{_inline_markdown(cell)}</td>" for cell in row)
             output.append("</tr>")
         output.append("</tbody>")
     output.append("</table>")
@@ -110,6 +133,7 @@ def _markdown_to_html(markdown: str) -> str:
     """Small safe Markdown subset; enough for deterministic L4 output."""
     output: list[str] = []
     table_buffer: list[str] = []
+    list_buffer: list[str] = []
 
     def flush_table() -> None:
         nonlocal table_buffer
@@ -117,26 +141,41 @@ def _markdown_to_html(markdown: str) -> str:
             output.append(_markdown_table(table_buffer))
             table_buffer = []
 
+    def flush_list() -> None:
+        nonlocal list_buffer
+        if list_buffer:
+            output.append("<ul class=\"insight-list\">")
+            output.extend(f"<li>{_inline_markdown(item)}</li>" for item in list_buffer)
+            output.append("</ul>")
+            list_buffer = []
+
     for raw_line in markdown.splitlines():
         line = raw_line.rstrip()
         if line.strip().startswith("|") and line.strip().endswith("|"):
+            flush_list()
             table_buffer.append(line)
             continue
         flush_table()
 
         stripped = line.strip()
         if not stripped:
+            flush_list()
             continue
         if stripped.startswith("### "):
-            output.append(f"<h3>{html.escape(stripped[4:])}</h3>")
+            flush_list()
+            output.append(f"<h4>{_inline_markdown(stripped[4:])}</h4>")
         elif stripped.startswith("## "):
-            output.append(f"<h2>{html.escape(stripped[3:])}</h2>")
+            flush_list()
+            output.append(f"<h3>{_inline_markdown(stripped[3:])}</h3>")
         elif stripped.startswith("# "):
-            output.append(f"<h1>{html.escape(stripped[2:])}</h1>")
+            flush_list()
+            output.append(f"<h3>{_inline_markdown(stripped[2:])}</h3>")
         elif stripped.startswith("- "):
-            output.append(f"<li>{html.escape(stripped[2:])}</li>")
+            list_buffer.append(stripped[2:])
         else:
+            flush_list()
             output.append(_paragraph(stripped))
+    flush_list()
     flush_table()
     return "\n".join(output)
 
@@ -194,6 +233,94 @@ def _severity_bars_html(verdict: DatasetVerdict) -> str:
             )
         )
     return "".join(items)
+
+
+def _severity_key(value: str | None) -> str:
+    normalized = (value or "INFO").lower()
+    if normalized not in {"critical", "high", "warn", "info"}:
+        return "info"
+    return normalized
+
+
+def _verdict_headline(verdict: DatasetVerdict) -> str:
+    if verdict.verdict.value == "NOT_READY":
+        return "Do not use this dataset for downstream analysis yet."
+    if verdict.verdict.value == "WARN":
+        return "Usable only after analyst review."
+    return "No blocking data-quality issues detected."
+
+
+def _scope_for_issue(issue: IssueSummary) -> str:
+    if issue.affected_table and issue.affected_column:
+        return f"{issue.affected_table}.{issue.affected_column}"
+    return issue.affected_column or issue.affected_table or "dataset"
+
+
+def _science_brief(verdict: DatasetVerdict) -> str:
+    summary = verdict.summary
+    meta = verdict.dataset_meta
+    return f"""
+<section class="science-brief science-brief-{html.escape(verdict.verdict.value)}">
+  <div class="science-brief-copy">
+    <p class="eyebrow">Data Science Brief</p>
+    <h2>{html.escape(_verdict_headline(verdict))}</h2>
+    <p><strong>Decision signal:</strong> {html.escape(verdict.verdict_rationale)}</p>
+  </div>
+  <div class="science-scoreboard" aria-label="Decision metrics">
+    <div class="science-score science-score-critical"><span>Critical</span><strong>{_format_int(summary.critical)}</strong></div>
+    <div class="science-score science-score-high"><span>High</span><strong>{_format_int(summary.high)}</strong></div>
+    <div class="science-score science-score-warn"><span>Warn</span><strong>{_format_int(summary.warn)}</strong></div>
+    <div class="science-score"><span>Missing cells</span><strong>{_format_percent(meta.p_cells_missing)}</strong></div>
+  </div>
+</section>
+"""
+
+
+def _issue_spotlight(verdict: DatasetVerdict) -> str:
+    if not verdict.top_issues:
+        return (
+            "<section class=\"priority-spotlight\">"
+            "<div class=\"section-heading\"><p class=\"eyebrow\">Immediate Attention</p>"
+            "<h2>No ranked issue details were included.</h2></div>"
+            "<p class=\"muted-copy\">The report can still be reviewed through the executive interpretation and statistical profile.</p>"
+            "</section>"
+        )
+
+    cards: list[str] = []
+    for index, issue in enumerate(verdict.top_issues[:4], start=1):
+        severity = issue.effective_severity.value
+        key = _severity_key(severity)
+        cards.append(
+            "<article class=\"priority-card priority-{key}\">"
+            "<div class=\"priority-rank\">#{rank}</div>"
+            "<div class=\"priority-card-body\">"
+            "<div class=\"priority-card-title\">"
+            "<span>{severity}</span>"
+            "<strong>{issue_type}</strong>"
+            "</div>"
+            "<p><strong>Scope:</strong> <code>{scope}</code></p>"
+            "<p><strong>Affected rows:</strong> <code>{affected}</code></p>"
+            "<p>{rationale}</p>"
+            "</div>"
+            "</article>".format(
+                key=html.escape(key),
+                rank=index,
+                severity=html.escape(severity),
+                issue_type=html.escape(issue.issue_type),
+                scope=html.escape(_scope_for_issue(issue)),
+                affected=_format_int(issue.affected_count),
+                rationale=html.escape(issue.rationale),
+            )
+        )
+    return (
+        "<section class=\"priority-spotlight\">"
+        "<div class=\"section-heading\"><p class=\"eyebrow\">Immediate Attention</p>"
+        "<h2>Issues that should drive the next action</h2></div>"
+        "<div class=\"priority-grid\">"
+        f"{''.join(cards)}"
+        "</div>"
+        "</section>"
+    )
 
 
 def _statistical_overview(verdict: DatasetVerdict) -> str:
@@ -367,8 +494,22 @@ def _agent_meta(detail: dict | None, fallback_label: str) -> str:
     return f"{provider} · guardrail {status} · {fallback} · retries {retry_count}"
 
 
-def _agent_content(result: MultiAgentResult) -> str:
+def _editor_card(label: str, value: str | None, tone: str) -> str:
+    if not value:
+        return ""
+    return (
+        f"<article class=\"editor-insight-card editor-insight-{html.escape(tone)}\">"
+        f"<span>{html.escape(label)}</span>"
+        f"<p>{_inline_markdown(value)}</p>"
+        "</article>"
+    )
+
+
+def _agent_content(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
     sections: list[str] = []
+    sections.append(_science_brief(verdict))
+    sections.append(_issue_spotlight(verdict))
+
     details = _agent_detail_lookup(result)
     status_panel = _agent_status_panel(result)
     if status_panel:
@@ -376,33 +517,47 @@ def _agent_content(result: MultiAgentResult) -> str:
 
     editor = result.editor_output
     if editor is not None:
-        sections.append("<section class=\"ai-section editor-section\">")
-        sections.append(f"<div class=\"agent-meta\">Editor · {html.escape(_agent_meta(details.get('editor'), 'guardrail passed'))}</div>")
-        sections.append("<h2>Executive Summary</h2>")
-        if editor.executive_summary:
-            sections.append(_paragraph(editor.executive_summary))
-        if editor.verdict_explanation:
-            sections.append("<h2>Decision Rationale</h2>")
-            sections.append(_paragraph(editor.verdict_explanation))
-        if editor.cross_table_evaluation:
-            sections.append("<h2>Cross-table Evaluation</h2>")
-            sections.append(_paragraph(editor.cross_table_evaluation))
-        if editor.priority_ranking:
-            sections.append("<h2>Priority Ranking</h2>")
-            sections.append(_paragraph(editor.priority_ranking))
-        sections.append("</section>")
+        editor_cards = "".join([
+            _editor_card("Read first", editor.executive_summary, "primary"),
+            _editor_card("Why this verdict", editor.verdict_explanation, "rationale"),
+            _editor_card("Cross-table note", editor.cross_table_evaluation, "cross"),
+            _editor_card("Priority focus", editor.priority_ranking, "priority"),
+        ])
+        sections.append(
+            "<section class=\"ai-section editor-section\">"
+            "<div class=\"section-heading\">"
+            "<p class=\"eyebrow\">Executive Interpretation</p>"
+            "<h2>What the data scientist should notice first</h2>"
+            "</div>"
+            f"<div class=\"agent-meta\">Editor · {html.escape(_agent_meta(details.get('editor'), 'guardrail passed'))}</div>"
+            f"<div class=\"editor-insight-grid\">{editor_cards}</div>"
+            "</section>"
+        )
 
     if result.analyst_outputs:
         sections.append("<section class=\"ai-section analyst-sections\">")
-        sections.append("<h2>Analyst Sections</h2>")
+        sections.append(
+            "<div class=\"section-heading\">"
+            "<p class=\"eyebrow\">Evidence Review</p>"
+            "<h2>Guardrailed analyst notes</h2>"
+            "</div>"
+        )
         for output in result.analyst_outputs:
             status = "passed" if output.guardrail_passed else "failed"
             detail = details.get(output.cluster_type)
             sections.append(
                 f"<article class=\"analyst-section guardrail-{status}\">"
-                f"<div class=\"agent-meta\">{html.escape(output.cluster_type)} · {html.escape(_agent_meta(detail, f'guardrail {status}'))}</div>"
+                "<div class=\"analyst-section-header\">"
+                "<div>"
+                f"<span class=\"analyst-label\">{html.escape(output.cluster_type)}</span>"
+                f"<div class=\"agent-meta\">{html.escape(_agent_meta(detail, f'guardrail {status}'))}</div>"
+                "</div>"
+                f"<span class=\"guardrail-mini guardrail-{status}\">guardrail {status}</span>"
+                "</div>"
             )
+            sections.append("<div class=\"analyst-body\">")
             sections.append(_markdown_to_html(output.markdown))
+            sections.append("</div>")
             sections.append("</article>")
         sections.append("</section>")
 
@@ -459,7 +614,7 @@ def merge_to_tabbed_html(
         n=verdict.dataset_meta.n,
         n_var=verdict.dataset_meta.n_var,
         p_cells_missing=html.escape(f"{verdict.dataset_meta.p_cells_missing * 100:.1f}%"),
-        ai_analysis_content=_agent_content(multi_agent_result),
+        ai_analysis_content=_agent_content(multi_agent_result, verdict),
         statistical_overview=_statistical_overview(verdict),
         ydata_escaped=html.escape(ydata_html, quote=True),
         guardrail_status=html.escape(guardrail_status),

@@ -39,3 +39,4 @@ Smart EDA should feel like a data-quality command center for analysts and data e
 - Evidence panels: bordered sections with compact headings, fact grids, tables, and warnings.
 - Report shell: top guardrail chip, verdict banner, metadata grid, two-tab AI/ydata structure.
 - Statistical workbench: before embedding ydata, show a data-science overview with real metric cards, log-scaled shape bars, missingness/duplicate meters, severity distribution, and an interactive profile viewer frame.
+- Data science report narrative: start with an executive brief, immediate-attention issue cards, guardrail provenance, editor interpretation cards, then analyst evidence cards with emphasized code tokens and bullet blocks.
