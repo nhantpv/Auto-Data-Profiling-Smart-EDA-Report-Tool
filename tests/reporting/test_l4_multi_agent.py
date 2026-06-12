@@ -168,6 +168,23 @@ def test_multi_agent_l4_repairs_editor_causal_language(monkeypatch):
     assert guardrail.agents[-1]["provider"] == "openai-editor-repaired"
 
 
+def test_editor_output_parser_coerces_nested_values_to_strings():
+    editor = l4_report._editor_output_from_text(
+        json.dumps({
+            "executive_summary": {"verdict": "WARN", "rows": 10},
+            "verdict_explanation": ["Needs review", {"issue_type": "MISSINGNESS"}],
+            "cross_table_evaluation": None,
+            "priority_ranking": [{"issue_type": "MISSINGNESS", "rank": 1}],
+        })
+    )
+
+    assert isinstance(editor.executive_summary, str)
+    assert "verdict: WARN" in editor.executive_summary
+    assert "issue_type: MISSINGNESS" in editor.verdict_explanation
+    assert editor.cross_table_evaluation == ""
+    assert "rank: 1" in editor.priority_ranking
+
+
 def test_multi_agent_l4_renders_full_appendix_html(monkeypatch):
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
     meta = DatasetMeta(

@@ -11,11 +11,39 @@ from ontology.models import DataQualityFindings, DatasetVerdict, SchemaEvaluatio
 
 _NUMERIC_TOKEN = re.compile(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?%?(?![A-Za-z0-9_])")
 _BACKTICK_TOKEN = re.compile(r"`([^`]+)`")
+_QUALIFIED_REFERENCE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\b")
+_NUMBER_WITH_UNIT_REFERENCE = re.compile(
+    r"^\s*(-?\d+(?:\.\d+)?%?)\s+"
+    r"(?:row|rows|row\(s\)|column|columns|column\(s\)|table|tables|"
+    r"issue|issues|finding|findings|relationship|relationships)\s*$",
+    re.IGNORECASE,
+)
 _CAUSATION_LANGUAGE = re.compile(
     r"\b(causes?|caused by|causing|leads? to|result(?:s|ed)? in|due to)\b",
     re.IGNORECASE,
 )
 _THRESHOLDS = ThresholdRegistry()
+_STRUCTURAL_REFERENCES = {
+    "affected_columns",
+    "affected_count",
+    "affected_percent",
+    "affected_table",
+    "affected_column",
+    "confidence",
+    "count",
+    "description",
+    "dq_dimensions",
+    "error_type",
+    "evidence_metrics",
+    "finding_id",
+    "issue_type",
+    "max_severity",
+    "ml_impact",
+    "provenance",
+    "relationship",
+    "severity",
+    "threshold_ref",
+}
 
 
 class GuardrailViolation(BaseModel):
@@ -103,6 +131,13 @@ def _is_year_passthrough(token: str) -> bool:
     return value.is_integer() and 1900 <= int(value) <= 2100
 
 
+def _reference_number_with_unit_allowed(reference: str, allowed_numbers: set[str]) -> bool:
+    match = _NUMBER_WITH_UNIT_REFERENCE.match(reference)
+    if not match:
+        return False
+    return _number_allowed(_normalize_numeric_token(match.group(1)), allowed_numbers)
+
+
 def _number_allowed(token: str, allowed_numbers: set[str]) -> bool:
     if token in allowed_numbers:
         return True
@@ -148,10 +183,32 @@ def _collect_evidence_values(value: Any, numbers: set[str], references: set[str]
         return
     if isinstance(value, str):
         references.add(value)
+        references.update(_QUALIFIED_REFERENCE.findall(value))
         for token in _NUMERIC_TOKEN.findall(value):
             numbers.add(_normalize_numeric_token(token))
         return
     if isinstance(value, dict):
+        affected_table = value.get("affected_table")
+        affected_column = value.get("affected_column")
+        if isinstance(affected_table, str) and isinstance(affected_column, str):
+            references.add(f"{affected_table}.{affected_column}")
+
+        child_table = value.get("child_table")
+        child_column = value.get("child_column")
+        parent_table = value.get("parent_table")
+        parent_column = value.get("parent_column")
+        if isinstance(child_table, str) and isinstance(child_column, str):
+            references.add(f"{child_table}.{child_column}")
+        if isinstance(parent_table, str) and isinstance(parent_column, str):
+            references.add(f"{parent_table}.{parent_column}")
+        if (
+            isinstance(child_table, str)
+            and isinstance(child_column, str)
+            and isinstance(parent_table, str)
+            and isinstance(parent_column, str)
+        ):
+            references.add(f"{child_table}.{child_column} -> {parent_table}.{parent_column}")
+
         for key, item in value.items():
             references.add(str(key))
             _collect_evidence_values(item, numbers, references)
@@ -184,7 +241,7 @@ def _report_for_text(
             ))
 
     for reference in checked_references:
-        if reference not in references:
+        if reference not in references and not _reference_number_with_unit_allowed(reference, numbers):
             violations.append(GuardrailViolation(
                 check="reference_allowed_set",
                 value=reference,
@@ -259,6 +316,7 @@ def build_narrative_evidence(
         "HIGH",
         "CRITICAL",
         "none",
+        *_STRUCTURAL_REFERENCES,
     }
 
     meta = verdict.dataset_meta
@@ -361,6 +419,12 @@ def build_narrative_evidence(
             for metric in rel.evidence_metrics.values():
                 if isinstance(metric, (int, float, bool)):
                     _add_numbers(numbers, [int(metric) if isinstance(metric, bool) else metric])
+
+    _collect_evidence_values(verdict.model_dump(mode="json"), numbers, references)
+    if findings is not None:
+        _collect_evidence_values(findings.model_dump(mode="json"), numbers, references)
+    if schema is not None:
+        _collect_evidence_values(schema.model_dump(mode="json"), numbers, references)
 
     return NarrativeEvidence(numbers=numbers, references=references)
 

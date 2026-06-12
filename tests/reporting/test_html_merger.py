@@ -26,6 +26,26 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
     result = MultiAgentResult(
         analyst_outputs=[AnalystOutput(cluster_type="MISSINGNESS", markdown="### `MISSINGNESS`\n\nOK")],
         editor_output=EditorOutput(executive_summary="Dataset has 12 rows."),
+        guardrail_report={
+            "provider": "openai-multi-agent",
+            "agents": [
+                {
+                    "agent": "analyst",
+                    "cluster": "MISSINGNESS",
+                    "provider": "openai-analyst",
+                    "status": "passed",
+                    "used_fallback": False,
+                    "retry_count": 0,
+                },
+                {
+                    "agent": "editor",
+                    "provider": "openai-editor",
+                    "status": "passed",
+                    "used_fallback": False,
+                    "retry_count": 0,
+                },
+            ],
+        },
         used_fallback=True,
     )
 
@@ -33,5 +53,14 @@ def test_merge_to_tabbed_html_renders_ai_and_ydata_tabs():
 
     assert "tab-ai" in html
     assert "tab-stats" in html
+    assert "Statistical Workbench" in html
+    assert "Profile Diagnostics" in html
+    assert "Completeness" in html
+    assert "Severity Distribution" in html
+    assert "profile-viewer" in html
+    assert "LLM Agent Review" in html
+    assert "Guardrailed L4 Comments" in html
+    assert "openai-analyst" in html
+    assert "openai-editor" in html
     assert "MISSINGNESS" in html
     assert "&lt;h1&gt;YData&lt;/h1&gt;" in html

@@ -129,6 +129,45 @@ def _repair_editor_output(candidate: EditorOutput) -> EditorOutput:
     })
 
 
+_EDITOR_STRING_KEYS = (
+    "executive_summary",
+    "verdict_explanation",
+    "cross_table_evaluation",
+    "priority_ranking",
+)
+
+
+def _stringify_editor_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_stringify_editor_value(item) for item in value]
+        return "; ".join(part for part in parts if part)
+    if isinstance(value, dict):
+        parts: list[str] = []
+        for key, item in value.items():
+            text = _stringify_editor_value(item)
+            if text:
+                parts.append(f"{key}: {text}")
+        return "; ".join(parts)
+    return str(value)
+
+
+def _editor_output_from_text(text: str) -> EditorOutput:
+    raw_payload = json.loads(_strip_json_fences(text))
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Editor output must be a JSON object")
+    payload = {
+        key: _stringify_editor_value(raw_payload.get(key))
+        for key in _EDITOR_STRING_KEYS
+    }
+    return EditorOutput.model_validate(payload)
+
+
 def _compact_payload(
     findings: DataQualityFindings | None,
     verdict: DatasetVerdict,
@@ -300,7 +339,8 @@ async def _run_analyst(
     if llm_enabled:
         prompt = (
             "Write one concise Markdown section for this issue cluster. "
-            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks.\n\n"
+            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks. "
+            "Do not use numbered lists, ordinal numbers, or extra counts that are not present in the JSON slice.\n\n"
             f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
         )
         feedback = ""
@@ -311,6 +351,8 @@ async def _run_analyst(
                     (
                         "You are an EDA Analyst agent. Explain only the assigned issue cluster. "
                         "Do not invent numbers, thresholds, columns, tables, or recommendations. "
+                        "Write a heading plus short bullets; bullets must not start with numbers. "
+                        "Use table.column references only when that exact relationship exists in evidence. "
                         "Do not use causal language such as causes, caused by, causing, leads to, "
                         "results in, or due to."
                     ),
@@ -420,6 +462,7 @@ async def _run_editor(
         }
         prompt = (
             "Write JSON with keys executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking. "
+            "Every value must be a short string, not an object and not an array. "
             "Use only the provided evidence.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
         )
@@ -430,6 +473,7 @@ async def _run_editor(
                     f"{prompt}{feedback}",
                     (
                         "You are an EDA Editor agent. Return valid compact JSON only. "
+                        "The JSON values must be strings. Do not return nested objects or arrays. "
                         "Do not invent numbers, columns, tables, relationships, or thresholds. "
                         "Do not use causal language such as causes, caused by, causing, leads to, "
                         "results in, or due to."
@@ -437,7 +481,7 @@ async def _run_editor(
                     "SMART_EDA_L4_EDITOR_MODEL",
                     "gpt-4o",
                 )
-                candidate = EditorOutput.model_validate_json(_strip_json_fences(text))
+                candidate = _editor_output_from_text(text)
             except Exception as exc:
                 if llm_errors is not None:
                     llm_errors.append(f"editor:attempt_{attempt}: {exc}")
@@ -663,6 +707,13 @@ async def run_multi_agent_l4(
     report.llm_errors = llm_errors
     report.agents = agent_details
     if report.status != "passed":
+        llm_errors.extend(
+            "final:guardrail_failed:{check}:{value}".format(
+                check=violation.check,
+                value=violation.value,
+            )
+            for violation in report.violations[:12]
+        )
         text = render_deterministic_l4_report(findings, verdict, schema)
         report = validate_narrative(
             text,

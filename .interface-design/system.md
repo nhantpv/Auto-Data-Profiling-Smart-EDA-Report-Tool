@@ -38,4 +38,4 @@ Smart EDA should feel like a data-quality command center for analysts and data e
 - Pipeline rail: L0-L4 layer context in the control panel.
 - Evidence panels: bordered sections with compact headings, fact grids, tables, and warnings.
 - Report shell: top guardrail chip, verdict banner, metadata grid, two-tab AI/ydata structure.
-
+- Statistical workbench: before embedding ydata, show a data-science overview with real metric cards, log-scaled shape bars, missingness/duplicate meters, severity distribution, and an interactive profile viewer frame.
