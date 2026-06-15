@@ -1866,6 +1866,14 @@ tr:last-child td {
   background: var(--surface-inset);
 }
 
+.cross-table-correlation-table {
+  overflow-x: auto;
+}
+
+.cross-table-correlation-table table {
+  min-width: 760px;
+}
+
 .legacy-profile-detail {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
