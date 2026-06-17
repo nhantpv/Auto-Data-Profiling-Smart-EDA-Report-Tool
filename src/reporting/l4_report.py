@@ -627,7 +627,13 @@ def render_table_result_html(
         )
 
     def _col_stats_row(col_name: str) -> str:
+        # Try exact match first; then try prefixed key (single-table mode)
         stats = col_stats.get(col_name)
+        if stats is None:
+            for k, v in col_stats.items():
+                if "." in k and k.split(".", 1)[1] == col_name:
+                    stats = v
+                    break
         if not stats:
             return ""
         items = []
@@ -665,6 +671,10 @@ def render_table_result_html(
     if table_chart_html:
         parts.append('<div class="table-chart-row">' + "".join(table_chart_html) + '</div>')
 
+    def _display_col(col_name: str) -> str:
+        """Strip table prefix for display: 'table.col' -> 'col'."""
+        return col_name.split(".", 1)[1] if "." in col_name else col_name
+
     if not result.column_issues:
         parts.append('<p class="no-issues">✅ Không phát hiện vấn đề nào từ mức WARN trở lên.</p>')
     else:
@@ -674,7 +684,7 @@ def render_table_result_html(
             parts.append(f'<div class="column-issue severity-{sev_class}">')
             parts.append(
                 f'<h4 class="col-issue-title">🔸 Cột: '
-                f'<code>{html.escape(issue.column_name)}</code></h4>'
+                f'<code>{html.escape(_display_col(issue.column_name))}</code></h4>'
             )
             # Inline stats cho cột này
             stats_row = _col_stats_row(issue.column_name)
@@ -695,10 +705,12 @@ def render_table_result_html(
             )
             # Nhúng chart cấp cột nếu có
             col_chart_found = False
+            # Try both prefixed and plain column name for chart key lookup
+            display_col = _display_col(issue.column_name)
             for ckey in _COLUMN_LEVEL_CHARTS:
-                # Key dạng "column_name.chart_key" hoặc chart duy nhất cho cột đó
                 for possible_key in (
                     f"{issue.column_name}.{ckey}",
+                    f"{display_col}.{ckey}",
                     ckey if len(result.column_issues) == 1 else None,
                 ):
                     if possible_key and possible_key in chart_paths:

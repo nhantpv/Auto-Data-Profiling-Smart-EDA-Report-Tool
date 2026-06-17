@@ -67,6 +67,8 @@ class AnomalyRecord(BaseModel):
     top_10_samples: List[Dict[str, Any]]
     diagnostic_chart: Optional[str] = None
     full_anomalies_export_path: Optional[str] = None
+    probable_causes: List[str] = Field(default_factory=list)  # Nguyên nhân có thể
+    suggested_fix: List[str] = Field(default_factory=list)    # Gợi ý xử lý
 
 
 class DataQualityFindings(BaseModel):
@@ -186,6 +188,8 @@ class IntegrityError(BaseModel):
     top_10_samples: List[Dict[str, Any]] = Field(default_factory=list)
     missing_field_context: Optional[MissingFieldContext] = None
     relationship: Optional[RelationshipInfo] = None
+    probable_causes: List[str] = Field(default_factory=list)  # Nguyên nhân có thể
+    suggested_fix: List[str] = Field(default_factory=list)    # Gợi ý xử lý
 
 
 class SchemaEvaluationFindings(BaseModel):

@@ -22,6 +22,7 @@ const serviceStatusEl = document.getElementById("serviceStatus");
 const sampleListEl = document.getElementById("sampleList");
 const jobProgressBarEl = document.getElementById("jobProgressBar");
 const reportActionsEl = document.getElementById("reportActions");
+const pipelineTimelineEl = document.getElementById("pipelineTimeline");
 const singleForm = document.getElementById("singleForm");
 const multiForm = document.getElementById("multiForm");
 const cancelJobButton = document.getElementById("cancelJob");
@@ -271,6 +272,175 @@ function renderReportActions(payload) {
   }
 }
 
+// Pipeline phase definitions — always rendered upfront (⏳ pending → 🔄 running → ✅ done).
+// matchPrefix: step names that belong to this phase are matched by startsWith().
+const PIPELINE_PHASES = [
+  { id: "ingest",    label: "📥 Đọc & xác thực dữ liệu",           matchPrefix: "📥" },
+  { id: "schema",    label: "🗂️ Phân tích schema",                   matchPrefix: "🗂️" },
+  { id: "ydata",     label: "📊 Thống kê YData",                     matchPrefix: "📊" },
+  { id: "anomaly",   label: "⚠️ Phát hiện dị biệt (PyOD)",           matchPrefix: "⚠️" },
+  { id: "missing",   label: "🔍 Phân loại missing values",            matchPrefix: "🔍" },
+  { id: "severity",  label: "📐 Tổng hợp & hiệu chỉnh severity",     matchPrefix: "📐" },
+  { id: "graph",     label: "🔗 Dựng đồ thị quan hệ",                matchPrefix: "🔗" },
+  { id: "gate",      label: "🔑 Kiểm tra toàn vẹn FK/PK",            matchPrefix: "🔑" },
+  { id: "verdict",   label: "⚖️ Tổng hợp verdict chất lượng",        matchPrefix: "⚖️" },
+  { id: "corr",      label: "📈 Phân tích tương quan liên bảng",      matchPrefix: "📈" },
+  { id: "charts",    label: "🎨 Vẽ biểu đồ & sơ đồ quan hệ",         matchPrefix: "🎨" },
+  { id: "llm",       label: "🧠 Phân tích LLM (Senior Data Scientist)", matchPrefix: "🧠" },
+  { id: "export",    label: "📄 Xuất báo cáo HTML",                   matchPrefix: "📄" },
+];
+
+// Single-table pipeline omits schema/graph/gate/corr/charts phases
+const PIPELINE_PHASES_SINGLE = [
+  { id: "ingest",    label: "📥 Đọc dữ liệu" },
+  { id: "ydata",     label: "📊 Phân tích thống kê (YData)" },
+  { id: "anomaly",   label: "⚠️ Phát hiện dị biệt (PyOD)" },
+  { id: "missing",   label: "🔍 Phân loại missing values" },
+  { id: "severity",  label: "📐 Hiệu chỉnh & tổng hợp severity" },
+  { id: "llm",       label: "🧠 Phân tích LLM (Senior Data Scientist)" },
+  { id: "export",    label: "📄 Xuất báo cáo HTML" },
+];
+
+function renderPipelineTimeline(steps = [], jobStatus = "running", mode = "multi") {
+  const container = document.getElementById("pipelineTimeline");
+  if (!container) return;
+  container.innerHTML = "";
+  container.classList.remove("hidden");
+
+  const phases = mode === "single" ? PIPELINE_PHASES_SINGLE : PIPELINE_PHASES;
+
+  // Build lookup: phase.id → all matching steps[]
+  // Primary match: step.step_id === phase.id (reliable ASCII)
+  const phaseStepMap = {};
+  steps.forEach((step) => {
+    const stepId = step.step_id || "";
+    if (!stepId) return;
+    if (!phaseStepMap[stepId]) phaseStepMap[stepId] = [];
+    phaseStepMap[stepId].push(step);
+  });
+
+  // Find the LATEST phase index that has received any event.
+  // Phases before it are considered DONE (since the pipeline moved past them).
+  // The phase AT that index is the currently RUNNING phase.
+  let latestActiveIdx = -1;
+  phases.forEach((phase, idx) => {
+    if (phaseStepMap[phase.id] && phaseStepMap[phase.id].length > 0) {
+      latestActiveIdx = idx;
+    }
+  });
+
+  // Render each phase row
+  phases.forEach((phase, phaseIdx) => {
+    const matched = phaseStepMap[phase.id] || [];
+    const hasError = matched.some(s => s.status === "error");
+    const hasExplicitDone = matched.some(s => s.status === "done");
+
+    let phaseStatus = "pending";
+
+    if (hasError) {
+      phaseStatus = "error";
+    } else if (matched.length === 0) {
+      phaseStatus = "pending";
+    } else if (phaseIdx < latestActiveIdx) {
+      // Earlier phase — pipeline already moved past it → DONE
+      phaseStatus = "done";
+    } else if (hasExplicitDone) {
+      // Explicit "done" event received
+      phaseStatus = "done";
+    } else {
+      // Latest active phase (latestActiveIdx === phaseIdx) → RUNNING
+      phaseStatus = "running";
+    }
+
+    // Override if job finished
+    if (jobStatus === "completed" && matched.length > 0 && phaseStatus !== "error") {
+      phaseStatus = "done";
+    }
+
+    const row = document.createElement("div");
+    row.className = `timeline-step step-${phaseStatus}`;
+    row.dataset.phase = phase.id;
+
+    const icon = document.createElement("span");
+    icon.className = "step-status-icon";
+    if (phaseStatus === "done")    icon.textContent = "✅";
+    else if (phaseStatus === "running") { icon.textContent = "🔄"; icon.classList.add("spin"); }
+    else if (phaseStatus === "error")   icon.textContent = "❌";
+    else                                icon.textContent = "⏳";
+
+    const label = document.createElement("span");
+    label.className = "step-label";
+    label.textContent = phase.label;
+
+    row.appendChild(icon);
+    row.appendChild(label);
+
+    // Detail: show last detail from matched steps
+    const details = matched.map(s => s.detail).filter(Boolean);
+    const lastDetail = details[details.length - 1] || "";
+    let detailText = lastDetail;
+    if (matched.length > 1) {
+      // Grouped phases (ydata/anomaly across tables)
+      const doneCount = phaseIdx < latestActiveIdx
+        ? matched.length
+        : matched.filter(s => s.status === "done").length;
+      detailText = `${doneCount}/${matched.length} bảng`;
+      if (lastDetail && phaseStatus === "running") detailText += ` · ${lastDetail}`;
+    }
+
+    if (detailText) {
+      const detail = document.createElement("span");
+      detail.className = "step-detail";
+      detail.textContent = detailText;
+      row.appendChild(detail);
+    }
+
+    container.appendChild(row);
+  });
+
+  // If pipeline just started (no steps yet), show first phase as running
+  if (steps.length === 0 && jobStatus === "running") {
+    const firstRow = container.querySelector(".step-pending");
+    if (firstRow) firstRow.className = "timeline-step step-running";
+  }
+
+  // Auto-scroll to currently running step
+  const running = container.querySelector(".step-running");
+  if (running) running.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+
+function renderPipelineSummary(steps = [], startedAt = null, status = "completed", mode = "multi") {
+  const container = document.getElementById("pipelineTimeline");
+  if (!container) return;
+
+  let elapsed = "";
+  if (startedAt) {
+    try {
+      const secs = Math.round((Date.now() - new Date(startedAt).getTime()) / 1000);
+      elapsed = ` — ${secs}s`;
+    } catch (_) { /* ignore */ }
+  }
+
+  const phases = mode === "single" ? PIPELINE_PHASES_SINGLE : PIPELINE_PHASES;
+  const totalPhases = phases.length;
+  const doneCount = steps.filter(s => s.status === "done").length;
+  const errorCount = steps.filter(s => s.status === "error").length;
+  const emoji = status === "failed" ? "❌" : "✅";
+  const label = status === "failed" ? "Thất bại" : "Hoàn thành";
+
+  container.classList.remove("hidden");
+  container.innerHTML = `
+    <div class="timeline-summary ${status === "failed" ? "summary-failed" : "summary-done"}">
+      <span class="summary-icon">${emoji}</span>
+      <div class="summary-text">
+        <strong>${label}${elapsed}</strong>
+        <span>${totalPhases} giai đoạn · ${errorCount > 0 ? errorCount + " lỗi" : "0 lỗi pipeline"}</span>
+      </div>
+    </div>
+  `;
+}
+
 function updateJobActions(payload) {
   const status = payload.status || "idle";
   activeJobId = payload.job_id || activeJobId;
@@ -291,6 +461,7 @@ function renderJobProgress(payload) {
   reportEl.textContent = payload.report || payload.message || "Pipeline is running.";
   updateHeroFromPayload(payload);
   updateJobActions(payload);
+  renderPipelineTimeline(payload.steps || [], status, payload.mode || "multi");
 }
 
 function renderResult(payload) {
@@ -310,6 +481,7 @@ function renderResult(payload) {
   renderStructuredResults(payload);
   setButtonsDisabled(false);
   updateJobActions(payload);
+  renderPipelineSummary(payload.steps || [], payload.started_at, payload.status, payload.mode || "multi");
 }
 
 function sleep(ms) {

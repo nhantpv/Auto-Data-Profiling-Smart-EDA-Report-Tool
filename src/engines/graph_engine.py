@@ -20,6 +20,7 @@ from ontology.models import (
     Severity,
 )
 from ontology.finding_registry import FindingRegistry
+from ontology.issue_catalog import get_causes, get_fixes
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,8 @@ def reconstruct_graph(
                 top_10_samples=parent_df[parent_df[parent_column].duplicated(keep=False)]
                 .head(10)
                 .to_dict(orient="records"),
+                probable_causes=get_causes("NON_UNIQUE_PARENT_PK"),
+                suggested_fix=get_fixes("NON_UNIQUE_PARENT_PK"),
             )))
         role = classify_relationship_role(cardinality, child_table, parent_table)
 

@@ -12,6 +12,7 @@ from ontology.models import (
     DatasetMeta, ColumnStats, AnomalyRecord, DataQualityFindings, Provenance, Severity,
 )
 from ontology.finding_registry import FindingRegistry
+from ontology.issue_catalog import get_causes, get_fixes
 from config.threshold_registry import ThresholdRegistry
 from severity.missingness import detect_missingness
 from severity.calibrator import load_calibrator_table
@@ -212,6 +213,8 @@ def build_data_quality_findings(
             affected_percent=round(ratio, 4),
             top_10_samples=top_samples,
             full_anomalies_export_path=outlier_export,
+            probable_causes=get_causes("OUTLIER_ENSEMBLE"),
+            suggested_fix=get_fixes("OUTLIER_ENSEMBLE"),
         )
         anomalies.append(registry.register_anomaly(record))
 
@@ -241,6 +244,8 @@ def build_data_quality_findings(
             affected_percent=meta.p_duplicates,
             top_10_samples=dup_samples,  # type: ignore[arg-type]
             full_anomalies_export_path=duplicate_export,
+            probable_causes=get_causes("DUPLICATE"),
+            suggested_fix=get_fixes("DUPLICATE"),
         )
         anomalies.append(registry.register_anomaly(record))
 

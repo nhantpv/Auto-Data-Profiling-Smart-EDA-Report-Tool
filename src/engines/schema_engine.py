@@ -17,6 +17,7 @@ from ontology.models import (
     TableInfo,
 )
 from ontology.finding_registry import FindingRegistry
+from ontology.issue_catalog import get_causes, get_fixes
 
 logger = logging.getLogger(__name__)
 _POLICY_PATH = Path(__file__).parent.parent.parent / "config" / "schema_inference_policy.json"
@@ -174,6 +175,8 @@ def _err(
         top_10_samples=samples[:10],
         missing_field_context=missing_field_context,
         relationship=relationship,
+        probable_causes=get_causes(error_type),
+        suggested_fix=get_fixes(error_type),
     )
 
 
@@ -543,6 +546,8 @@ def check_foreign_keys(tables: dict, refs: list) -> list:
                 affected_count=n,
                 dq_dimensions=["Consistency"],
                 top_10_samples=samples,
+                probable_causes=get_causes("ORPHAN_FOREIGN_KEY"),
+                suggested_fix=get_fixes("ORPHAN_FOREIGN_KEY"),
             ))
     return errors
 

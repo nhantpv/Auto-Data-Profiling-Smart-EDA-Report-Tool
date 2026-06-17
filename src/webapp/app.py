@@ -157,6 +157,9 @@ def _job_response(job_id: str, output_dir: Path) -> dict:
         "message": meta.get("message", ""),
         "error": public_error,
         "files": files,
+        "mode": meta.get("mode", "single"),
+        "steps": meta.get("steps", []),
+        "started_at": meta.get("started_at"),
         "report": report_path.read_text(encoding="utf-8") if report_path.exists() else "",
         "dataset_verdict": _read_json(output_dir / "dataset_verdict.json"),
         "data_quality_findings": _read_json(output_dir / "data_quality_findings.json"),
@@ -182,6 +185,7 @@ def _submit_pipeline_job(job_id: str, mode: str, spec: dict) -> dict:
                 spec["output_dir"],
                 spec.get("schema_path"),
                 profiling_minimal=bool(spec.get("profiling_minimal", False)),
+                job_id=job_id,
             )
         if mode == "multi":
             if spec.get("confirmed_schema_path") or spec.get("fact_table"):
@@ -192,12 +196,14 @@ def _submit_pipeline_job(job_id: str, mode: str, spec: dict) -> dict:
                     spec.get("confirmed_schema_path"),
                     spec.get("fact_table"),
                     profiling_minimal=bool(spec.get("profiling_minimal", False)),
+                    job_id=job_id,
                 )
             return run_pipeline.run_multi(
                 spec["data_paths"],
                 spec["output_dir"],
                 spec.get("schema_path"),
                 profiling_minimal=bool(spec.get("profiling_minimal", False)),
+                job_id=job_id,
             )
         raise RuntimeError(f"Unsupported job mode: {mode}")
 

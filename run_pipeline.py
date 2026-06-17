@@ -1,6 +1,7 @@
 """Full EDA pipeline: data file -> findings JSON + verdict [+ schema findings]."""
 import json
 import html as html_lib
+import logging
 import sys
 import warnings
 from pathlib import Path
@@ -10,6 +11,14 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("smart_eda")
 
 SRC = Path(__file__).parent / "src"
 sys.path.insert(0, str(SRC))
@@ -47,6 +56,7 @@ from severity.missingness import detect_missingness
 from reporting.summary_renderer import render_markdown_report
 from reporting.l4_report import generate_multi_agent_report
 from reporting.html_merger import merge_to_tabbed_html
+from webapp.progress_bus import NullBus, get_bus
 
 
 def _safe_artifact_stem(name: str) -> str:
@@ -526,15 +536,25 @@ def run(
     out_dir: str = "output",
     schema_path: str | None = None,
     profiling_minimal: bool = False,
+    job_id: str | None = None,
 ) -> dict:
+    bus = get_bus(job_id) if job_id else NullBus()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    bus.emit("📥 Đọc dữ liệu", 0.05, detail=Path(data_path).name, status="running", step_id="ingest")
+    logger.info("[L0] Đọc dữ liệu: %s", data_path)
     df = load_any(data_path)
+    bus.emit("📊 Phân tích thống kê (YData)", 0.15, detail=f"{len(df):,} dòng · {len(df.columns)} cột", status="running", step_id="ydata")
+    logger.info("[L1] Profiling YData: %s dòng, %s cột", len(df), len(df.columns))
     profile = run_profiling(df, minimal=profiling_minimal)
+    bus.emit("⚠️ Phát hiện dị biệt (PyOD)", 0.28, status="running", step_id="anomaly")
+    logger.info("[L2] Phát hiện anomaly (PyOD)")
     anomaly_result = run_anomaly_detection(df)
 
     # Layer 2.5a — Missingness classification (MCAR/MAR/MNAR)
+    bus.emit("🔍 Phân loại missing values", 0.36, status="running", step_id="missing")
+    logger.info("[L2.5a] Phân loại missing values (MCAR/MAR/MNAR)")
     mechs = detect_missingness(df)
 
     # Layer 3 — Build findings JSON
@@ -561,10 +581,22 @@ def run(
         artifact_prefix=_safe_artifact_stem(data_path),
     )
 
+    bus.emit("📐 Hiệu chỉnh & tổng hợp severity", 0.52, status="running", step_id="severity")
+    logger.info("[L2.5] Calibrate & compound severity")
     table = load_calibrator_table()
     col_findings = calibrate_columns(findings.columns, table, n=findings.dataset_meta.n)
     all_dq = apply_compound(findings.anomalies + col_findings)
+
+    # ── Single-table fix ────────────────────────────────────────────────────
+    # In multi-table mode, _prefix_issue() adds "tablename.column" prefix so
+    # dispatcher._affected_table() can extract the table name from the dot.
+    # In single-table mode this prefix is absent, so each column name becomes
+    # its own "table" → each column gets its own tab in the report.
+    # Fix: apply the same prefix here using the dataset file stem.
+    dataset_stem = _safe_artifact_stem(data_path)
+    all_dq = [_prefix_issue(issue, dataset_stem) for issue in all_dq]
     findings.anomalies = all_dq
+    # ────────────────────────────────────────────────────────────────────────
 
     # Schema path (optional)
     integrity_errors = None
@@ -586,7 +618,11 @@ def run(
     l4_report_path = out / "l4_report.md"
     guardrail_path = out / "guardrail_report.json"
     html_report_path = out / "smart_eda_report.html"
+    bus.emit("🧠 Phân tích LLM (Senior Data Scientist)", 0.78, status="running", step_id="llm")
+    logger.info("[L4] Gọi LLM — Senior Data Scientist report")
     l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(findings, verdict, schema)
+    bus.emit("📄 Xuất báo cáo HTML", 0.92, status="running", step_id="export")
+    logger.info("[L4] Xuất báo cáo HTML")
     profile_fragment = _write_single_ydata_profile(df, out, minimal=profiling_minimal)
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
@@ -631,29 +667,56 @@ def run_multi(
     confirmed_schema_path: str | None = None,
     fact_table: str | None = None,
     profiling_minimal: bool = False,
+    job_id: str | None = None,
 ) -> dict:
     """Multi-table mode: N data files + optional schema -> schema findings + verdict.
     When schema_path is omitted, table schemas and relationships are inferred from data.
     Data-quality profiling is run per table and summarized across all loaded tables.
     """
+    bus = get_bus(job_id) if job_id else NullBus()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
 
+    bus.emit("📥 Đọc & xác thực dữ liệu", 0.05, detail=f"{len(data_paths)} file(s)", status="running", step_id="ingest")
+    logger.info("[L0] Đọc & xác thực %d files", len(data_paths))
     schema = validate_schema_multi(data_paths, schema_path)
 
+    bus.emit("🗂️ Phân tích schema", 0.08, detail=f"{schema.schema_meta.total_tables} bảng", status="done", step_id="schema")
+    logger.info("[L2] Schema: %d bảng, %d relationships",
+                schema.schema_meta.total_tables, len(schema.relationships))
     table_names = _table_names_for_paths(data_paths)
     table_sources = {
         table_name: Path(path).name
         for table_name, path in zip(table_names, data_paths)
     }
     table_findings: dict[str, DataQualityFindings] = {}
-    for table_name, path in zip(table_names, data_paths):
+    n_tables = len(data_paths)
+    for i, (table_name, path) in enumerate(zip(table_names, data_paths)):
+        pct_ydata = 0.12 + (i / n_tables) * 0.13   # 12% → 25%
+        bus.emit(
+            f"📊 Thống kê YData — {table_name}",
+            pct_ydata,
+            detail=Path(path).name,
+            status="running",
+            step_id="ydata",
+        )
+        logger.info("[L1] YData profiling — %s (%s)", table_name, Path(path).name)
         findings, _dq_findings = _profile_data_quality(
             str(path),
             out,
             artifact_prefix=table_name,
             profiling_minimal=profiling_minimal,
         )
+        n_rows = findings.dataset_meta.n
+        n_anomalies = len(findings.anomalies)
+        bus.emit(
+            f"⚠️ Dị biệt (PyOD) — {table_name}",
+            0.25 + (i / n_tables) * 0.08,  # 25% → 33%
+            detail=f"{n_rows:,} dòng · {n_anomalies} anomaly",
+            status="done",
+            step_id="anomaly",
+        )
+        logger.info("[L2] Anomaly — %s: %d dòng, %d anomalies", table_name, n_rows, n_anomalies)
         table_findings[table_name] = findings
 
     total_n = sum(f.dataset_meta.n for f in table_findings.values())
@@ -680,12 +743,25 @@ def run_multi(
         sample_seed=42 if any(f.dataset_meta.is_sampled for f in table_findings.values()) else None,
     )
     combined_findings = _combine_multi_findings(table_findings, meta)
+    bus.emit("📐 Tổng hợp & hiệu chỉnh severity", 0.36, status="running", step_id="severity")
+    logger.info("[L2.5] Tổng hợp severity & compound scoring")
 
     cross_tables = _load_tables_for_cross_analysis(data_paths, schema_path)
+    bus.emit("🔗 Dựng đồ thị quan hệ (Graph Engine)", 0.45, status="running", step_id="graph")
+    logger.info("[L2C] Graph Engine: dựng đồ thị quan hệ")
     schema_gate = apply_schema_gate(schema, cross_tables, confirmed_schema_path, fact_table)
     gated_schema = schema.model_copy(update={"relationships": schema_gate.relationships})
     graph_result = reconstruct_graph(cross_tables, gated_schema)
     graph_relationships = accepted_relationships_from_graph(schema_gate.relationships, graph_result)
+    bus.emit(
+        "🔑 Kiểm tra toàn vẹn FK/PK (Schema Gate)",
+        0.52,
+        detail=f"{len(graph_relationships)} relationship(s) · {len(schema_gate.warnings)} cảnh báo",
+        status="done",
+        step_id="gate",
+    )
+    logger.info("[L2B5] Schema Gate: %d relationships, %d cảnh báo, %d integrity errors",
+                len(graph_relationships), len(schema_gate.warnings), len(graph_result.integrity_errors))
     schema_meta_for_output = schema.schema_meta.model_copy(update={
         "total_relationships": len(graph_relationships),
     })
@@ -698,11 +774,16 @@ def run_multi(
         "relationships": graph_relationships,
         "warnings": [*schema_gate.warnings, *graph_result.warnings],
     })
+    bus.emit("⚖️ Tổng hợp verdict chất lượng", 0.60, status="running", step_id="verdict")
+    logger.info("[L3] Tổng hợp verdict chất lượng dữ liệu")
     verdict = aggregate(
         combined_findings.dataset_meta,
         dq_findings=combined_findings.anomalies,
         integrity_errors=schema_for_output.integrity_errors,
     )
+    logger.info("[L3] Verdict: %s", verdict.verdict)
+    bus.emit("📈 Phân tích tương quan liên bảng", 0.65, status="running", step_id="corr")
+    logger.info("[L4] Cross-table analysis")
     cross_table_analysis = run_cross_table_analysis(
         cross_tables,
         graph_relationships,
@@ -711,6 +792,8 @@ def run_multi(
     )
 
     # Vẽ chart sơ đồ quan hệ và gắn vào verdict.dataset_meta.overview_charts
+    bus.emit("🎨 Vẽ biểu đồ & sơ đồ quan hệ", 0.72, status="running", step_id="charts")
+    logger.info("[L3.5] Vẽ biểu đồ quan hệ và diagnostic charts")
     network_chart_file = draw_relationship_network(
         schema_for_output, str(out), artifact_prefix="multi"
     )
@@ -744,12 +827,17 @@ def run_multi(
     l4_report_path = out / "l4_report.md"
     guardrail_path = out / "guardrail_report.json"
     html_report_path = out / "smart_eda_report.html"
+    bus.emit("🧠 Phân tích LLM (Senior Data Scientist)", 0.80, status="running", step_id="llm")
+    logger.info("[L4] Gọi LLM — Senior Data Scientist report")
     l4_report, guardrail_report, multi_agent_result = generate_multi_agent_report(
         combined_findings,
         verdict,
         schema_for_output,
         cross_table_analysis,
     )
+    logger.info("[L4] LLM xong — guardrail: %s", guardrail_report.status)
+    bus.emit("📄 Xuất báo cáo HTML", 0.92, status="running", step_id="export")
+    logger.info("[L4] Xuất báo cáo HTML")
     profile_fragment = (
         _write_multi_ydata_profiles(cross_tables, out, minimal=profiling_minimal)
         + _cross_table_correlation_fragment(cross_table_analysis)
@@ -782,18 +870,15 @@ def run_multi(
     html_report_path.write_text(smart_html, encoding="utf-8")
     artifact_manifest_path = _write_artifact_manifest(out)
 
-    print(f"data_quality_findings.json       -> {dq_path}")
-    print(f"schema_evaluation_findings.json -> {schema_out}")
-    print(f"schema_gate.json                -> {schema_gate_path}")
-    print(f"relationship_graph.json         -> {graph_path}")
-    print(f"cross_table_analysis.json       -> {cross_table_path}")
-    print(f"cross_table_correlations.csv    -> {cross_table_correlations_path}")
-    print(f"dataset_verdict.json            -> {verdict_path}")
-    print(f"summary_report.md               -> {report_path}")
-    print(f"l4_report.md                    -> {l4_report_path}")
-    print(f"guardrail_report.json           -> {guardrail_path}")
-    print(f"smart_eda_report.html           -> {html_report_path}")
-    print(f"artifact_manifest.json          -> {artifact_manifest_path}")
+    logger.info("[OUTPUT] data_quality_findings.json       -> %s", dq_path)
+    logger.info("[OUTPUT] schema_evaluation_findings.json  -> %s", schema_out)
+    logger.info("[OUTPUT] schema_gate.json                 -> %s", schema_gate_path)
+    logger.info("[OUTPUT] relationship_graph.json          -> %s", graph_path)
+    logger.info("[OUTPUT] cross_table_analysis.json        -> %s", cross_table_path)
+    logger.info("[OUTPUT] dataset_verdict.json             -> %s", verdict_path)
+    logger.info("[OUTPUT] smart_eda_report.html            -> %s", html_report_path)
+    logger.info("[DONE]   Pipeline hoàn thành. Verdict: %s — %d issues",
+                verdict.verdict, verdict.summary.total_issues if verdict.summary else 0)
     return {
         "dq_path": str(dq_path),
         "schema_path": str(schema_out),

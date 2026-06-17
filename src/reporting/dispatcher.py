@@ -182,12 +182,19 @@ def dispatch_by_table(
         })
         issues = [_trim_samples(record) for record in records]
 
-        # Inject column statistics cho các cột bị ảnh hưởng
+        # Inject column statistics cho các cột bị ảnh hưởng.
+        # affected_columns có thể là "table.column" (multi) hoặc "column" (single).
+        # columns dict có thể dùng plain "column" key. Try cả hai.
         col_stats: dict[str, Any] = {}
         if columns:
             for col_name in affected_columns:
                 if col_name in columns:
                     col_stats[col_name] = columns[col_name].model_dump(exclude_none=True)
+                else:
+                    # Strip table prefix: "survey_data.WorkExp" → "WorkExp"
+                    plain = col_name.split(".", 1)[-1] if "." in col_name else col_name
+                    if plain in columns:
+                        col_stats[col_name] = columns[plain].model_dump(exclude_none=True)
 
         table_clusters.append(TableCluster(
             table_name=table_name,

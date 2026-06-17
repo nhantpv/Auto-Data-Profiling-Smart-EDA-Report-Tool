@@ -1408,3 +1408,167 @@ td a:hover {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* ─── Pipeline Progress Timeline ─────────────────────────────────────────── */
+
+.pipeline-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 14px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.timeline-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  transition: background 200ms ease;
+}
+
+.timeline-step .step-status-icon {
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.timeline-step .step-label {
+  color: var(--text-secondary);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-step .step-detail {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+/* Step state styles */
+.step-done {
+  background: transparent;
+}
+
+.step-done .step-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.step-pending {
+  background: transparent;
+  opacity: 0.5;
+}
+
+.step-pending .step-label {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.step-pending .step-detail {
+  display: none;
+}
+
+.step-running {
+  background: linear-gradient(90deg, rgba(180, 83, 9, 0.06), transparent);
+  border: 1px solid rgba(180, 83, 9, 0.14);
+}
+
+.step-running .step-label {
+  color: var(--warn);
+  font-weight: 700;
+}
+
+.step-warn {
+  background: rgba(180, 83, 9, 0.04);
+}
+
+.step-warn .step-label {
+  color: var(--warn);
+}
+
+.step-error {
+  background: rgba(180, 35, 24, 0.05);
+  border: 1px solid rgba(180, 35, 24, 0.12);
+}
+
+.step-error .step-label {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+/* Spinning animation for running step */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.spin {
+  display: inline-block;
+  animation: spin 1.1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+/* Pipeline done/failed summary badge */
+.timeline-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.summary-done {
+  background: var(--ok-soft);
+  border: 1px solid rgba(21, 128, 61, 0.22);
+}
+
+.summary-failed {
+  background: var(--danger-soft);
+  border: 1px solid rgba(180, 35, 24, 0.22);
+}
+
+.summary-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.summary-text {
+  display: grid;
+  gap: 3px;
+}
+
+.summary-text strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.summary-text span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
