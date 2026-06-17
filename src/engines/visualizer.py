@@ -313,3 +313,184 @@ def attach_overview_charts(
             **charts,
         }
     return findings
+
+
+# ============================================================
+# L4 Charts — for the structured report
+# ============================================================
+
+def draw_stacked_bar_issues(
+    verdict,
+    out_dir: str,
+    artifact_prefix: str | None = None,
+) -> Optional[str]:
+    """Stacked bar chart: issue count by table and severity level.
+
+    Shows CRITICAL/HIGH/WARN distribution across tables → Phần 1 Executive Dashboard.
+    """
+    try:
+        if not verdict.top_issues:
+            return None
+
+        # Group by (table, severity)
+        table_severity: dict[str, dict[str, int]] = {}
+        for issue in verdict.top_issues:
+            table = issue.get("affected_table") or issue.get("affected_column", "dataset")
+            severity = issue.get("severity", "WARN")
+            table_severity.setdefault(table, {"CRITICAL": 0, "HIGH": 0, "WARN": 0})
+            if severity in table_severity[table]:
+                table_severity[table][severity] += 1
+
+        if not table_severity:
+            return None
+
+        tables = list(table_severity.keys())
+        critical = [table_severity[t].get("CRITICAL", 0) for t in tables]
+        high = [table_severity[t].get("HIGH", 0) for t in tables]
+        warn = [table_severity[t].get("WARN", 0) for t in tables]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(tables) * 1.2), 4))
+        x = np.arange(len(tables))
+        width = 0.6
+
+        ax.bar(x, critical, width, label="CRITICAL", color="#e74c3c")
+        ax.bar(x, high, width, bottom=critical, label="HIGH", color="#f39c12")
+        ax.bar(
+            x, warn, width,
+            bottom=[c + h for c, h in zip(critical, high)],
+            label="WARN", color="#f1c40f",
+        )
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(tables, rotation=30, ha="right", fontsize=9)
+        ax.set_ylabel("Issue Count")
+        ax.set_title("Issues by Table & Severity")
+        ax.legend(loc="upper right", fontsize=8)
+        fig.tight_layout()
+
+        file_name = _chart_file_name("stacked_bar_issues", artifact_prefix)
+        return _save_chart(fig, out_dir, file_name)
+    except Exception as exc:
+        logger.warning("draw_stacked_bar_issues failed: %s", exc)
+        return None
+
+
+def draw_relationship_network(
+    schema,
+    out_dir: str,
+    artifact_prefix: str | None = None,
+) -> Optional[str]:
+    """Relationship network graph: tables as nodes, FK edges with integrity color.
+
+    Uses networkx (lazy import) → Phần 3a Schema Evaluation.
+    """
+    try:
+        import networkx as nx
+    except ImportError:
+        logger.warning("networkx not installed — skipping relationship graph")
+        return None
+
+    try:
+        if not schema or not schema.relationships:
+            return None
+
+        G = nx.DiGraph()
+        edge_colors = []
+        edge_labels = {}
+
+        # Collect integrity error tables for coloring
+        error_tables = set()
+        if schema.integrity_errors:
+            for err in schema.integrity_errors:
+                error_tables.add(err.affected_table)
+
+        for rel in schema.relationships:
+            child = rel.child_table
+            parent = rel.parent_table
+            G.add_edge(child, parent)
+            # Color edge based on integrity
+            has_error = child in error_tables or parent in error_tables
+            edge_colors.append("#e74c3c" if has_error else "#27ae60")
+            label = rel.cardinality if rel.cardinality != "UNKNOWN" else ""
+            edge_labels[(child, parent)] = label
+
+        if G.number_of_edges() == 0:
+            return None
+
+        fig, ax = plt.subplots(figsize=(max(8, G.number_of_nodes() * 1.5), 6))
+        pos = nx.spring_layout(G, seed=42, k=2)
+        nx.draw_networkx_nodes(G, pos, ax=ax, node_size=1200, node_color="#3498db", alpha=0.9)
+        nx.draw_networkx_labels(G, pos, ax=ax, font_size=9, font_weight="bold")
+        nx.draw_networkx_edges(
+            G, pos, ax=ax,
+            edge_color=edge_colors,
+            width=2,
+            arrows=True,
+            arrowsize=15,
+            connectionstyle="arc3,rad=0.1",
+        )
+        nx.draw_networkx_edge_labels(G, pos, edge_labels, ax=ax, font_size=7)
+        ax.set_title("Table Relationship Network")
+        ax.axis("off")
+        fig.tight_layout()
+
+        file_name = _chart_file_name("relationship_network", artifact_prefix)
+        return _save_chart(fig, out_dir, file_name)
+    except Exception as exc:
+        logger.warning("draw_relationship_network failed: %s", exc)
+        return None
+
+
+def draw_top_correlations_bar(
+    cross_table_analysis,
+    out_dir: str,
+    top_n: int = 10,
+    artifact_prefix: str | None = None,
+) -> Optional[str]:
+    """Horizontal bar chart of top N cross-table correlations by |coefficient|.
+
+    → Phần 3b Cross Correlation.
+    """
+    try:
+        if not cross_table_analysis or not cross_table_analysis.correlations:
+            return None
+
+        # Sort by absolute coefficient
+        corrs = sorted(
+            cross_table_analysis.correlations,
+            key=lambda c: abs(c.get("coefficient", 0) if isinstance(c, dict) else abs(getattr(c, "coefficient", 0))),
+            reverse=True,
+        )[:top_n]
+
+        if not corrs:
+            return None
+
+        labels = []
+        coefficients = []
+        for c in corrs:
+            if isinstance(c, dict):
+                label = f"{c.get('parent_column', '?')} ↔ {c.get('child_column', '?')}"
+                coeff = c.get("coefficient", 0)
+            else:
+                label = f"{getattr(c, 'parent_column', '?')} ↔ {getattr(c, 'child_column', '?')}"
+                coeff = getattr(c, "coefficient", 0)
+            labels.append(label)
+            coefficients.append(coeff)
+
+        fig, ax = plt.subplots(figsize=(8, max(3, len(labels) * 0.4)))
+        colors = ["#e74c3c" if abs(c) > 0.8 else "#f39c12" if abs(c) > 0.5 else "#27ae60" for c in coefficients]
+        y_pos = np.arange(len(labels))
+        ax.barh(y_pos, coefficients, color=colors, height=0.6)
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, fontsize=8)
+        ax.set_xlabel("Correlation Coefficient")
+        ax.set_title(f"Top {len(labels)} Cross-Table Correlations")
+        ax.axvline(x=0, color="grey", linewidth=0.5)
+        fig.tight_layout()
+
+        file_name = _chart_file_name("top_correlations", artifact_prefix)
+        return _save_chart(fig, out_dir, file_name)
+    except Exception as exc:
+        logger.warning("draw_top_correlations_bar failed: %s", exc)
+        return None
+

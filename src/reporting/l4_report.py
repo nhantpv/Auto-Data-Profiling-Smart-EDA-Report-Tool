@@ -16,19 +16,25 @@ from guardrail import (
 )
 from ontology.models import (
     AnalystOutput,
+    AnalystTableResult,
+    ColumnIssue,
     CrossTableAnalysis,
     DataQualityFindings,
     DatasetVerdict,
     DispatchResult,
     EditorOutput,
+    EditorStructuredOutput,
+    FeatureUsabilityItem,
     IntegrityError,
     IssueCluster,
     MultiAgentResult,
     SEVERITY_ORDER,
     SchemaEvaluationFindings,
+    SchemaGateResult,
     Severity,
+    TableCluster,
 )
-from reporting.dispatcher import dispatch
+from reporting.dispatcher import dispatch, dispatch_by_table
 
 
 def _pct(value: float) -> str:
@@ -852,3 +858,436 @@ def generate_l4_report(
 ) -> tuple[str, GuardrailReport]:
     text, report, _result = generate_multi_agent_report(findings, verdict, schema)
     return text, report
+
+
+# ============================================================
+# NEW: Structured JSON Multi-Agent Pipeline (Table-based)
+# ============================================================
+
+_TABLE_ANALYST_SYSTEM_PROMPT = (
+    "You are a Senior Data Scientist performing EDA on a dataset. "
+    "Analyze the assigned table and return valid JSON only. "
+    "The JSON must have keys: table_name (string), table_overview (string), "
+    "column_issues (array of objects with keys: column_name, severity, problem, "
+    "ml_consequence, suggested_action, evidence_ref). "
+    "For problem: describe the issue with exact numbers from the evidence. "
+    "For ml_consequence: explain how this affects model families "
+    "(Linear/Logistic, Tree-based, Neural Networks, Clustering). "
+    "For suggested_action: use advisory tone — suggest, do not command. "
+    "For evidence_ref: use the finding_id from the evidence JSON if available, otherwise null. "
+    "Do not invent numbers, columns, or tables not in the evidence. "
+    "Do not use causal language such as causes, caused by, leads to, results in, or due to."
+)
+
+_TABLE_ANALYST_USER_PROMPT_TEMPLATE = (
+    "Analyze this table and return structured JSON. "
+    "Include only columns with issues at WARN severity or above. "
+    "Use only the evidence provided below.\n\n"
+    "{json_slice}"
+)
+
+_EDITOR_STRUCTURED_SYSTEM_PROMPT = (
+    "You are a Senior Data Scientist writing an executive summary of a data quality report. "
+    "Return valid JSON only with these keys: "
+    "executive_summary (string — several sentences), "
+    "feature_usability (array of objects with keys: column, status, reason "
+    "where status is 'ready' or 'needs_work' or 'drop'), "
+    "fix_priority (array of strings — column names in priority order), "
+    "cross_table_evaluation (string or null), "
+    "verdict_explanation (string). "
+    "Do not invent numbers or columns not in the evidence. "
+    "Use advisory tone throughout."
+)
+
+
+def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTableResult:
+    """Deterministic fallback: tạo AnalystTableResult từ TableCluster không cần LLM."""
+    column_issues: list[ColumnIssue] = []
+    # Gom issues theo cột
+    col_issues_map: dict[str, list[dict]] = {}
+    for issue in table_cluster.issues:
+        col = issue.get("affected_column") or issue.get("affected_table") or "dataset"
+        col_issues_map.setdefault(col, []).append(issue)
+
+    for col_name, issues in col_issues_map.items():
+        for issue in issues:
+            severity = issue.get("compound_severity") or issue.get("severity", "WARN")
+            issue_type = issue.get("issue_type") or issue.get("error_type", "UNKNOWN")
+            affected_count = issue.get("affected_count", 0)
+            affected_percent = issue.get("affected_percent")
+            pct_str = f" ({affected_percent:.1%})" if affected_percent is not None else ""
+
+            column_issues.append(ColumnIssue(
+                column_name=col_name,
+                severity=severity,
+                problem=(
+                    f"{issue_type}: {issue.get('description', 'Issue detected')}. "
+                    f"Affected: {affected_count} rows{pct_str}."
+                ),
+                ml_consequence="Review this column before using in modeling.",
+                suggested_action="Inspect the affected rows and decide on remediation.",
+                evidence_ref=issue.get("finding_id"),
+            ))
+
+    return AnalystTableResult(
+        table_name=table_cluster.table_name,
+        table_overview=(
+            f"Table '{table_cluster.table_name}' has {len(table_cluster.issues)} issues "
+            f"(max severity: {table_cluster.max_severity}) "
+            f"across {len(table_cluster.affected_columns)} columns."
+        ),
+        column_issues=column_issues,
+        guardrail_passed=True,
+        retry_count=0,
+    )
+
+
+async def _run_table_analyst(
+    table_cluster: TableCluster,
+    llm_errors: list[str] | None = None,
+) -> tuple[AnalystTableResult, dict[str, Any]]:
+    """Analyst agent per TABLE — trả AnalystTableResult (structured JSON)."""
+    fallback = _build_deterministic_table_result(table_cluster)
+    llm_enabled = _llm_enabled()
+
+    if llm_enabled:
+        prompt = _TABLE_ANALYST_USER_PROMPT_TEMPLATE.format(
+            json_slice=json.dumps(table_cluster.json_slice, ensure_ascii=False, indent=2),
+        )
+        for attempt in range(1, 4):
+            try:
+                text = await _call_openai_async(
+                    prompt,
+                    _TABLE_ANALYST_SYSTEM_PROMPT,
+                    "SMART_EDA_L4_ANALYST_MODEL",
+                    "gpt-4o-mini",
+                )
+                candidate = AnalystTableResult.model_validate_json(
+                    _strip_json_fences(text)
+                )
+                candidate.guardrail_passed = True
+                candidate.retry_count = attempt - 1
+                # Basic validation: table_name should match
+                if candidate.table_name != table_cluster.table_name:
+                    candidate.table_name = table_cluster.table_name
+                return candidate, {
+                    "agent": "table_analyst",
+                    "status": "passed",
+                    "provider": "openai-table-analyst",
+                    "used_fallback": False,
+                    "retry_count": attempt - 1,
+                    "table": table_cluster.table_name,
+                }
+            except Exception as exc:
+                if llm_errors is not None:
+                    llm_errors.append(
+                        f"table_analyst:{table_cluster.table_name}:attempt_{attempt}: {exc}"
+                    )
+                continue
+
+    return fallback, {
+        "agent": "table_analyst",
+        "status": "fallback",
+        "provider": "deterministic-table-analyst",
+        "used_fallback": llm_enabled,
+        "retry_count": 3 if llm_enabled else 0,
+        "table": table_cluster.table_name,
+    }
+
+
+async def _run_structured_editor(
+    verdict: DatasetVerdict,
+    analyst_results: list[AnalystTableResult],
+    cross_table_analysis: CrossTableAnalysis | None,
+    findings: DataQualityFindings | None = None,
+    schema: SchemaEvaluationFindings | None = None,
+    schema_gate: SchemaGateResult | None = None,
+    llm_errors: list[str] | None = None,
+) -> tuple[EditorStructuredOutput, dict[str, Any]]:
+    """Editor agent — nhận structured JSON từ Analyst, trả EditorStructuredOutput."""
+    # Build deterministic fallback
+    all_columns_ok: list[FeatureUsabilityItem] = []
+    all_columns_issues: list[FeatureUsabilityItem] = []
+    fix_priority: list[str] = []
+
+    for result in analyst_results:
+        for issue in result.column_issues:
+            status = "drop" if issue.severity == "CRITICAL" else "needs_work"
+            all_columns_issues.append(FeatureUsabilityItem(
+                column=issue.column_name,
+                status=status,
+                reason=f"[{issue.severity}] {issue.problem[:80]}",
+            ))
+            fix_priority.append(f"{result.table_name}.{issue.column_name}")
+
+    meta = verdict.dataset_meta
+    fallback = EditorStructuredOutput(
+        executive_summary=(
+            f"Dataset '{meta.file_name}' has {meta.n} rows and {meta.n_var} columns. "
+            f"Verdict: {verdict.verdict.value} with {verdict.summary.total_issues} total issues."
+        ),
+        feature_usability=all_columns_issues,
+        fix_priority=fix_priority,
+        cross_table_evaluation=_cross_table_summary(cross_table_analysis),
+        verdict_explanation=verdict.verdict_rationale,
+    )
+
+    llm_enabled = _llm_enabled()
+    if llm_enabled:
+        payload = {
+            "verdict": verdict.model_dump(mode="json"),
+            "analyst_results": [r.model_dump(mode="json") for r in analyst_results],
+            "cross_table_analysis": (
+                cross_table_analysis.model_dump(mode="json")
+                if cross_table_analysis else None
+            ),
+        }
+        # Inject extra context
+        if findings:
+            payload["columns"] = {
+                name: stats.model_dump(exclude_none=True)
+                for name, stats in findings.columns.items()
+            }
+        if schema_gate:
+            payload["schema_mode"] = schema_gate.mode
+        if schema and schema.relationships:
+            payload["relationship_cardinalities"] = [
+                f"{r.child_table}.{r.child_column} -> {r.parent_table}.{r.parent_column}: {r.cardinality}"
+                for r in schema.relationships if r.cardinality
+            ]
+
+        prompt = (
+            "Write a structured JSON executive summary for this data quality report. "
+            "Include feature_usability for ALL columns mentioned in analyst_results. "
+            "Order fix_priority by severity (CRITICAL first).\n\n"
+            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        )
+        for attempt in range(1, 4):
+            try:
+                text = await _call_openai_async(
+                    prompt,
+                    _EDITOR_STRUCTURED_SYSTEM_PROMPT,
+                    "SMART_EDA_L4_EDITOR_MODEL",
+                    "gpt-4o",
+                )
+                candidate = EditorStructuredOutput.model_validate_json(
+                    _strip_json_fences(text)
+                )
+                candidate.guardrail_passed = True
+                candidate.retry_count = attempt - 1
+                return candidate, {
+                    "agent": "structured_editor",
+                    "status": "passed",
+                    "provider": "openai-structured-editor",
+                    "used_fallback": False,
+                    "retry_count": attempt - 1,
+                }
+            except Exception as exc:
+                if llm_errors is not None:
+                    llm_errors.append(f"structured_editor:attempt_{attempt}: {exc}")
+                continue
+
+    return fallback, {
+        "agent": "structured_editor",
+        "status": "fallback",
+        "provider": "deterministic-structured-editor",
+        "used_fallback": llm_enabled,
+        "retry_count": 3 if llm_enabled else 0,
+    }
+
+
+def render_table_result_html(result: AnalystTableResult) -> str:
+    """Python Renderer: chuyển AnalystTableResult JSON → HTML đẹp.
+
+    LLM chỉ cung cấp nội dung (problem, ml_consequence, suggested_action).
+    Hình thức (icon, heading, format) do code Python quyết định → 100% đồng nhất.
+    """
+    parts: list[str] = []
+    table_icon = "📦"
+    parts.append(f'<div class="table-health-section">')
+    parts.append(f'<h3>{table_icon} Bảng: <code>{html.escape(result.table_name)}</code></h3>')
+    parts.append(f'<p class="table-overview">🌟 {html.escape(result.table_overview)}</p>')
+
+    if not result.column_issues:
+        parts.append('<p class="no-issues">✅ Không phát hiện vấn đề nào từ mức WARN trở lên.</p>')
+    else:
+        for issue in result.column_issues:
+            sev_class = issue.severity.lower()
+            sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "WARN": "🟡"}.get(issue.severity, "⚪")
+            parts.append(f'<div class="column-issue severity-{sev_class}">')
+            parts.append(f'<h4>🔸 Cột: <code>{html.escape(issue.column_name)}</code></h4>')
+            parts.append(
+                f'<p class="issue-problem">{sev_icon} '
+                f'<strong>[{html.escape(issue.severity)}]</strong> '
+                f'{html.escape(issue.problem)}</p>'
+            )
+            parts.append(
+                f'<p class="issue-ml"><strong>ML Consequence:</strong> '
+                f'{html.escape(issue.ml_consequence)}</p>'
+            )
+            parts.append(
+                f'<p class="issue-action"><strong>Gợi ý tham khảo:</strong> '
+                f'{html.escape(issue.suggested_action)}</p>'
+            )
+            if issue.evidence_ref:
+                parts.append(
+                    f'<p class="evidence-ref"><small>Evidence: '
+                    f'<code>{html.escape(issue.evidence_ref)}</code></small></p>'
+                )
+            parts.append('</div>')
+
+    parts.append('</div>')
+    return "\n".join(parts)
+
+
+def render_editor_structured_html(editor: EditorStructuredOutput) -> str:
+    """Python Renderer: chuyển EditorStructuredOutput → HTML cho Phần 1."""
+    parts: list[str] = []
+
+    # Executive Summary
+    parts.append(f'<div class="executive-summary">')
+    parts.append(f'<p>{html.escape(editor.executive_summary)}</p>')
+    parts.append('</div>')
+
+    # Feature Usability Summary
+    if editor.feature_usability:
+        status_icons = {"ready": "✅", "needs_work": "⚠️", "drop": "❌"}
+        parts.append('<div class="feature-usability">')
+        parts.append('<h3>Feature Usability Summary</h3>')
+        parts.append('<table><thead><tr>')
+        parts.append('<th>Trạng thái</th><th>Cột</th><th>Lý do</th>')
+        parts.append('</tr></thead><tbody>')
+        for item in editor.feature_usability:
+            icon = status_icons.get(item.status, "❓")
+            parts.append(
+                f'<tr><td>{icon}</td>'
+                f'<td><code>{html.escape(item.column)}</code></td>'
+                f'<td>{html.escape(item.reason)}</td></tr>'
+            )
+        parts.append('</tbody></table>')
+        parts.append('</div>')
+
+    # Fix Priority
+    if editor.fix_priority:
+        parts.append('<div class="fix-priority">')
+        parts.append('<h3>Fix Priority</h3>')
+        parts.append('<ol>')
+        for col in editor.fix_priority:
+            parts.append(f'<li><code>{html.escape(col)}</code></li>')
+        parts.append('</ol>')
+        parts.append('</div>')
+
+    # Verdict Explanation
+    if editor.verdict_explanation:
+        parts.append(f'<div class="verdict-explanation">')
+        parts.append(f'<h3>Decision Rationale</h3>')
+        parts.append(f'<p>{html.escape(editor.verdict_explanation)}</p>')
+        parts.append('</div>')
+
+    # Cross-table Evaluation
+    if editor.cross_table_evaluation:
+        parts.append(f'<div class="cross-table-eval">')
+        parts.append(f'<h3>Cross-Table Evaluation</h3>')
+        parts.append(f'<p>{html.escape(editor.cross_table_evaluation)}</p>')
+        parts.append('</div>')
+
+    return "\n".join(parts)
+
+
+async def run_structured_multi_agent_l4(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+    schema_gate: SchemaGateResult | None = None,
+) -> tuple[str, MultiAgentResult]:
+    """Luồng multi-agent MỚI: gom theo Table, output JSON, Python render HTML."""
+    # Step 1: Dispatch theo table
+    dispatch_result = dispatch_by_table(
+        findings.anomalies if findings else [],
+        schema.integrity_errors if schema else [],
+        columns=findings.columns if findings else None,
+    )
+
+    llm_errors: list[str] = []
+
+    # Step 2: Fan-out Analyst per table (song song)
+    analyst_tasks = [
+        _run_table_analyst(tc, llm_errors)
+        for tc in dispatch_result.table_clusters
+    ]
+    analyst_results_raw = await asyncio.gather(*analyst_tasks)
+    analyst_table_results = [result for result, _detail in analyst_results_raw]
+    agent_details = [detail for _result, detail in analyst_results_raw]
+
+    # Step 3: Editor tổng hợp
+    editor_structured, editor_detail = await _run_structured_editor(
+        verdict,
+        analyst_table_results,
+        cross_table_analysis,
+        findings=findings,
+        schema=schema,
+        schema_gate=schema_gate,
+        llm_errors=llm_errors,
+    )
+    agent_details.append(editor_detail)
+
+    # Step 4: Python render JSON → HTML
+    html_parts: list[str] = []
+
+    # Phần 1: Executive Dashboard
+    html_parts.append(render_editor_structured_html(editor_structured))
+
+    # Phần 2: Table-by-Table Health Check
+    html_parts.append('<div class="table-health-checks">')
+    html_parts.append('<h2>Table-by-Table Health Check</h2>')
+    for result in analyst_table_results:
+        html_parts.append(render_table_result_html(result))
+    html_parts.append('</div>')
+
+    rendered_html = "\n".join(html_parts)
+
+    # Build MultiAgentResult
+    used_fallback = any(
+        detail.get("used_fallback", False) for detail in agent_details
+    )
+    multi_result = MultiAgentResult(
+        analyst_table_results=analyst_table_results,
+        editor_structured=editor_structured,
+        appendix_html=_render_appendix_html(dispatch_result, findings, schema),
+        guardrail_report={"agents": agent_details, "llm_errors": llm_errors},
+        used_fallback=used_fallback,
+    )
+
+    return rendered_html, multi_result
+
+
+def generate_structured_report(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+    schema_gate: SchemaGateResult | None = None,
+) -> tuple[str, MultiAgentResult]:
+    """Sync wrapper cho luồng structured mới."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(
+            run_structured_multi_agent_l4(
+                findings, verdict, schema, cross_table_analysis, schema_gate
+            )
+        )
+    # Fallback nếu đang trong event loop
+    html_parts = []
+    if findings:
+        dispatch_result = dispatch_by_table(
+            findings.anomalies, 
+            schema.integrity_errors if schema else [],
+            columns=findings.columns,
+        )
+        for tc in dispatch_result.table_clusters:
+            fallback = _build_deterministic_table_result(tc)
+            html_parts.append(render_table_result_html(fallback))
+
+    return "\n".join(html_parts), MultiAgentResult(used_fallback=True)

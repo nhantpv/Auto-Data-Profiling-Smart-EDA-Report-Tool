@@ -264,22 +264,75 @@ class IssueCluster(BaseModel):
     json_slice: Dict[str, Any] = Field(default_factory=dict)
 
 
+class TableCluster(BaseModel):
+    """1 nhóm lỗi của 1 BẢNG — Dispatcher mới tạo, Analyst nhận.
+
+    Thay thế IssueCluster khi gom theo Table thay vì issue_type.
+    """
+    table_name: str
+    issues: List[Dict[str, Any]]     # AnomalyRecord/IntegrityError.model_dump() list
+    affected_columns: List[str]
+    max_severity: str                # Severity.value
+    column_statistics: Dict[str, Any] = Field(default_factory=dict)
+    json_slice: Dict[str, Any] = Field(default_factory=dict)
+
+
 class DispatchResult(BaseModel):
     """Output Dispatcher → input cho Analyst fan-out."""
     top_clusters: List[IssueCluster] = Field(default_factory=list)
+    table_clusters: List[TableCluster] = Field(default_factory=list)
     remainder_count: int = 0
 
 
+# --- Structured JSON output models (thay thế Markdown tự do) ---
+
+class ColumnIssue(BaseModel):
+    """1 issue của 1 cột — Analyst agent trả về trong JSON."""
+    column_name: str
+    severity: str                              # "CRITICAL" | "HIGH" | "WARN"
+    problem: str                               # Mô tả vấn đề + số liệu
+    ml_consequence: str                        # Ảnh hưởng đến nhóm thuật toán
+    suggested_action: str                      # Gợi ý tham khảo (advisory tone)
+    evidence_ref: Optional[str] = None         # Trỏ về finding_id của L3
+
+
+class AnalystTableResult(BaseModel):
+    """Output 1 Analyst agent — phân tích 1 bảng, structured JSON."""
+    table_name: str
+    table_overview: str                        # Nhận xét tổng quan bảng
+    column_issues: List[ColumnIssue] = Field(default_factory=list)
+    guardrail_passed: bool = True
+    retry_count: int = 0
+
+
 class AnalystOutput(BaseModel):
-    """Output 1 Analyst agent (mini model)."""
+    """Output 1 Analyst agent (mini model). Backward compat."""
     cluster_type: str
     markdown: str
     guardrail_passed: bool = True
     retry_count: int = 0
 
 
+class FeatureUsabilityItem(BaseModel):
+    """1 dòng trong bảng Feature Usability Summary."""
+    column: str
+    status: str                                # "ready" | "needs_work" | "drop"
+    reason: str
+
+
+class EditorStructuredOutput(BaseModel):
+    """Output Editor agent — structured JSON thay vì strings."""
+    executive_summary: str = ""
+    feature_usability: List[FeatureUsabilityItem] = Field(default_factory=list)
+    fix_priority: List[str] = Field(default_factory=list)
+    cross_table_evaluation: Optional[str] = None
+    verdict_explanation: str = ""
+    guardrail_passed: bool = True
+    retry_count: int = 0
+
+
 class EditorOutput(BaseModel):
-    """Output Editor agent (strong model)."""
+    """Output Editor agent (strong model). Backward compat."""
     executive_summary: str = ""
     verdict_explanation: str = ""
     cross_table_evaluation: Optional[str] = None
@@ -291,10 +344,13 @@ class EditorOutput(BaseModel):
 class MultiAgentResult(BaseModel):
     """Kết quả tổng hợp L4 multi-agent pipeline."""
     analyst_outputs: List[AnalystOutput] = Field(default_factory=list)
+    analyst_table_results: List[AnalystTableResult] = Field(default_factory=list)
     editor_output: Optional[EditorOutput] = None
+    editor_structured: Optional[EditorStructuredOutput] = None
     appendix_html: str = ""
     guardrail_report: Dict[str, Any] = Field(default_factory=dict)
     used_fallback: bool = False
+
 
 
 # ============================================================

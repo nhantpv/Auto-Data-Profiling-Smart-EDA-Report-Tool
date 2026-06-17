@@ -462,3 +462,63 @@ def validate_narrative(
         provider,
         used_fallback,
     )
+
+
+# ============================================================
+# Structured JSON Guardrail — evidence_ref validation
+# ============================================================
+
+def _collect_finding_ids(findings: DataQualityFindings | None) -> set[str]:
+    """Collect all finding_ids from L3 anomalies."""
+    ids: set[str] = set()
+    if findings is None:
+        return ids
+    for anomaly in findings.anomalies:
+        if anomaly.finding_id:
+            ids.add(anomaly.finding_id)
+    return ids
+
+
+def validate_evidence_refs(
+    analyst_results: list,
+    findings: DataQualityFindings | None,
+) -> list[dict[str, Any]]:
+    """Validate evidence_ref in structured AnalystTableResult output.
+
+    For each ColumnIssue in each AnalystTableResult:
+    - If evidence_ref is None → keep (deterministic fallback doesn't set it)
+    - If evidence_ref exists in L3 finding_ids → keep
+    - If evidence_ref does NOT exist in L3 finding_ids → REJECT (hallucination)
+
+    Rejected issues are removed in-place from the AnalystTableResult.
+
+    Returns:
+        List of rejected issue dicts for logging/auditing.
+    """
+    finding_ids = _collect_finding_ids(findings)
+    if not finding_ids:
+        # No finding_ids to validate against — skip validation
+        return []
+
+    rejected: list[dict[str, Any]] = []
+    for result in analyst_results:
+        valid_issues = []
+        for issue in result.column_issues:
+            if issue.evidence_ref is None:
+                # No ref → keep (deterministic or LLM didn't set it)
+                valid_issues.append(issue)
+            elif issue.evidence_ref in finding_ids:
+                # Valid ref → keep
+                valid_issues.append(issue)
+            else:
+                # Invalid ref → reject (hallucination)
+                rejected.append({
+                    "table": result.table_name,
+                    "column": issue.column_name,
+                    "evidence_ref": issue.evidence_ref,
+                    "reason": "evidence_ref not found in L3 finding_ids",
+                })
+        result.column_issues = valid_issues
+
+    return rejected
+

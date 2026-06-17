@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart EDA / VSF-EDA (v5.4) Architecture</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+        }
+        .mermaid-container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+            overflow-x: auto;
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .color-box {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            border: 1px solid rgba(0,0,0,0.2);
+        }
+        .done { background-color: #d4edda; border-color: #28a745; }
+        .wip { background-color: #fff3cd; border-color: #ffc107; }
+        .planned { background-color: #cce5ff; border-color: #0d6efd; }
+        .gate { background-color: #f8d7da; border-color: #dc3545; }
+        .footer {
+            text-align: center;
+            color: #6c757d;
+            font-size: 0.9em;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🧠 Sơ đồ Kiến trúc Hệ thống Smart EDA (v5.4)</h1>
+    
+    <div class="legend">
+        <div class="legend-item"><div class="color-box done"></div> Đã hoàn thành (Done)</div>
+        <div class="legend-item"><div class="color-box wip"></div> Đang phát triển (WIP)</div>
+        <div class="legend-item"><div class="color-box planned"></div> Kế hoạch (Planned)</div>
+        <div class="legend-item"><div class="color-box gate"></div> Cổng kiểm duyệt (Human Gate)</div>
+    </div>
+
+    <div class="mermaid-container">
+        <div class="mermaid">
+        flowchart TD
+            classDef done fill:#d4edda,stroke:#28a745,color:#000,stroke-width:2px
+            classDef wip fill:#fff3cd,stroke:#ffc107,color:#000,stroke-width:2px
+            classDef planned fill:#cce5ff,stroke:#0d6efd,color:#000,stroke-width:2px
+            classDef gate fill:#f8d7da,stroke:#dc3545,color:#000,stroke-width:2px
+
+            SRC["📂 DATA SOURCES<br/>CSV · XLSX · Parquet · JSON · DB · DBML/SQL"]:::done
+
+            L0["L0 INGESTION<br/>readers · encoding fallback · DB→DBML+CSV<br/>🔒 no-sampling"]:::done
+
+            L1["L1 PROFILING<br/>ydata-profiling Full Mode<br/>single-table + multi-table"]:::wip
+
+            L2a["L2a ANOMALY<br/>IForest + ECOD + LOF<br/>MAX combiner · z ≥ 3.0"]:::done
+
+            L2b["L2b SCHEMA single-table<br/>validate PK/FK/type/unique/not_null + infer<br/>value-coverage · NO Jaccard · NO LLM"]:::done
+
+            L2b5{"L2b.5 HUMAN-IN-THE-LOOP GATE<br/>Quick Mode: auto → inferred<br/>Precise Mode: UI → confirmed<br/>+ Chọn Fact Table"}:::gate
+
+            L2c["L2c GRAPH RECONSTRUCTION<br/>Schema Graph · JOIN_CARDINALITY<br/>Fact/Dim detection · Fan-out flag<br/>Parent PK runtime check"]:::wip
+
+            L25["L2.5 SEVERITY STACK<br/>(a) Missingness per-column<br/>(b) Calibrator<br/>(c) Compound<br/>(d) Disposition<br/>(e) Aggregator → VERDICT"]:::wip
+
+            L3["L3 FINDING REGISTRY → SSOT<br/>data_quality_findings.json<br/>schema_evaluation_findings.json<br/>dataset_verdict.json"]:::done
+
+            L3b["L3b CROSS-TABLE CORRELATION<br/>Phase 1: LLM Planner<br/>Phase 2: Deterministic compute<br/>Phase 3: LLM Evaluator · L4"]:::done
+
+            L35["L3.5 OUTPUT<br/>ydata HTML · Charts PNG<br/>ArtifactManifest"]:::done
+
+            L4["L4 MULTI-AGENT NARRATIVE<br/>Dispatcher → N×Analyst (mini) → Editor (strong)<br/>Guardrail per-agent · Retry 3×<br/>fail → fallback deterministic"]:::done
+
+            OUT["📦 2-TIER OUTPUT<br/>Tầng 1: smart_eda_report.html<br/>(Tabbed: AI Analysis + ydata Stats)<br/>Tầng 2: Raw JSON + PNG"]:::done
+
+            SRC --> L0
+            L0 --> L1
+            L0 --> L2a
+            L0 --> L2b
+            L1 --> L25
+            L2a --> L25
+            L2b -->|"single-table"| L25
+            L2b -->|"multi-table N≥2"| L2b5
+            L2b5 -->|"ConfirmedSchema"| L2c
+            L2c --> L25
+            L25 --> L3
+            L3 --> L3b
+            L3 --> L35
+            L3b --> L35
+            L35 --> L4
+            L4 --> OUT
+        </div>
+    </div>
+
+    <div class="footer">
+        Được tạo tự động từ bản thiết kế gốc (ARCHITECT.md). Thiết kế tập trung vào tính toàn vẹn hệ thống và Data Contracts.
+    </div>
+
+    <!-- Nạp thư viện Mermaid -->
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ 
+            startOnLoad: true,
+            theme: 'default',
+            flowchart: {
+                htmlLabels: true,
+                curve: 'basis'
+            }
+        });
+    </script>
+</body>
+</html>
