@@ -14,7 +14,7 @@
     <div class="report-topline">
       <div>
         <span class="product-mark">Smart EDA</span>
-        <span class="report-kind">Guarded data quality report</span>
+        <span class="report-kind">Báo cáo chất lượng dữ liệu có kiểm duyệt</span>
       </div>
       <span class="guardrail-chip guardrail-{guardrail_status}">Guardrail {guardrail_status}</span>
     </div>
@@ -23,48 +23,32 @@
       <div class="verdict-banner verdict-{verdict_class}">
         <div class="verdict-symbol" aria-hidden="true">{verdict_icon}</div>
         <div class="verdict-copy">
-          <p class="eyebrow">Smart EDA Verdict</p>
+          <p class="eyebrow">Kết Luận Smart EDA</p>
           <h1>{verdict_value}</h1>
           <p class="verdict-rationale">{verdict_rationale}</p>
         </div>
       </div>
 
-      <dl class="dataset-meta" aria-label="Dataset metadata">
+      <dl class="dataset-meta" aria-label="Thông tin dataset">
         <div><dt>File</dt><dd>{file_name}</dd></div>
-        <div><dt>Rows</dt><dd>{n}</dd></div>
-        <div><dt>Columns</dt><dd>{n_var}</dd></div>
-        <div><dt>Missing</dt><dd>{p_cells_missing}</dd></div>
+        <div><dt>Số dòng</dt><dd>{n}</dd></div>
+        <div><dt>Số cột</dt><dd>{n_var}</dd></div>
+        <div><dt>Thiếu dữ liệu</dt><dd>{p_cells_missing}</dd></div>
       </dl>
     </header>
 
-    <nav class="tab-bar" role="tablist" aria-label="Report sections">
-      <button id="tab-button-ai" class="tab active" type="button" role="tab" aria-selected="true" aria-controls="tab-ai" data-tab="ai">
-        <span>Data Science Report</span>
-        <small>Highlights + evidence</small>
-      </button>
-      <button id="tab-button-stats" class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-stats" data-tab="stats">
-        <span>Statistical Details</span>
-        <small>Profile exports</small>
-      </button>
+    <nav class="tab-bar" role="tablist" aria-label="Điều hướng báo cáo">
+      {tab_buttons}
     </nav>
 
     <main class="tab-panels">
-      <section id="tab-ai" class="tab-content active" role="tabpanel" aria-labelledby="tab-button-ai">
-        {ai_analysis_content}
-      </section>
-
-      <section id="tab-stats" class="tab-content" role="tabpanel" aria-labelledby="tab-button-stats" hidden>
-        <div class="stats-workbench">
-          {statistical_overview}
-          {profile_viewer_html}
-        </div>
-      </section>
+      {tab_panels}
     </main>
 
     <footer class="report-footer">
       <span>Provider: {provider}</span>
       <span>Model: {model_info}</span>
-      <span>Generated: {timestamp}</span>
+      <span>Tạo lúc: {timestamp}</span>
     </footer>
   </div>
   <script>{js_content}</script>

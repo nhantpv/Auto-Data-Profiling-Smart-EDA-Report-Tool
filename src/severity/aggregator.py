@@ -16,11 +16,18 @@ def _severity_rank(severity: Severity) -> int:
     return SEVERITY_ORDER.index(severity)
 
 
-def _affected_table_from_column(column: str | None) -> str | None:
-    if not column or "." not in column:
-        return None
-    table, _ = column.split(".", 1)
-    return table or None
+def _affected_table_from_finding(finding: "AnomalyRecord") -> "str | None":
+    """Lấy tên bảng từ finding: dùng table_name trước, sau đó parse từ affected_column."""
+    # AnomalyRecord.table_name được set bởi _prefix_issue() trong run_pipeline.py
+    table_name = getattr(finding, "table_name", None)
+    if table_name:
+        return table_name
+    # Fallback: parse từ "table.column" format
+    col = finding.affected_column
+    if col and "." in col:
+        table, _ = col.split(".", 1)
+        return table or None
+    return None
 
 
 def _risk_score(meta: DatasetMeta, findings: list[AnomalyRecord | IntegrityError]) -> float:
@@ -43,7 +50,7 @@ def _issue_summary_for_dq(finding: AnomalyRecord, index: int) -> IssueSummary:
         issue_type=finding.issue_type,
         severity=finding.severity,
         effective_severity=_effective(finding),
-        affected_table=_affected_table_from_column(finding.affected_column),
+        affected_table=_affected_table_from_finding(finding),
         affected_column=finding.affected_column,
         affected_count=finding.affected_count,
         confidence=finding.confidence,

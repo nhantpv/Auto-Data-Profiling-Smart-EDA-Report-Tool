@@ -49,8 +49,12 @@ def _affected_table(record: AnomalyRecord | IntegrityError) -> str:
     """Trả về tên bảng chứa record. Dùng cho gom theo table."""
     if isinstance(record, IntegrityError):
         return record.affected_table
-    # AnomalyRecord không có affected_table trực tiếp,
-    # dùng "default" cho single-file CSV
+    # AnomalyRecord: table_name được nhúng vào affected_column dưới dạng prefix
+    # "table.column" (column-level) hoặc "table" (row-level)
+    if record.affected_column:
+        # Lấy phần trước dấu "." đầu tiên
+        return record.affected_column.split(".")[0]
+    # Không xác định được → bỏ qua (caller nên skip record này)
     return "default"
 
 

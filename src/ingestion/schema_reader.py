@@ -64,12 +64,73 @@ def parse_schema(schema_path: str) -> dict:
 # ── Adapter 1: DBML (pydbml) ─────────────────────────────────────────────────
 
 
+def _normalise_dbml_types(text: str) -> str:
+    """Normalise non-standard DBML type aliases that pydbml rejects.
+
+    WikiDB and other generators use ``string``, ``bool``, ``float``, etc.
+    pydbml only accepts standard SQL / DBML types.  We replace these
+    before handing the text to the parser so that no ParseSyntaxException
+    is raised.
+
+    Uses ``\\b`` word-boundary anchors so that only standalone type tokens
+    are replaced — column names containing the same letters are untouched.
+    Longer aliases are processed first to prevent partial matches.
+    """
+    import re as _re
+
+    # (non-standard alias, standard replacement)
+    # Longer/more-specific aliases MUST come before shorter ones.
+    _aliases: list[tuple[str, str]] = [
+        ("datetime",        "timestamp"),   # before "date"
+        ("double",          "float8"),      # before "float"
+        ("bytes",           "blob"),        # before "byte"
+        ("number",          "decimal"),     # before "num"
+        ("string",          "varchar"),
+        ("boolean",         "boolean"),     # already valid, no-op — prevents bool→booleanean
+        ("bool",            "boolean"),
+        ("float",           "float8"),
+        ("int",             "integer"),
+        ("long",            "bigint"),
+        ("short",           "smallint"),
+        ("byte",            "smallint"),
+        ("char",            "varchar"),
+        ("num",             "decimal"),
+        ("text",            "text"),        # already valid, no-op
+        ("date",            "date"),        # already valid, no-op
+        ("timestamp",       "timestamp"),   # already valid, no-op
+        ("decimal",         "decimal"),     # already valid, no-op
+    ]
+    for alias, replacement in _aliases:
+        if alias == replacement:
+            continue  # skip no-op entries
+        # \b matches at a word boundary (transition between \w and \W).
+        # This ensures we only replace standalone type tokens, not substrings
+        # inside column names (e.g. "int" won't match inside "integer" or
+        # "int_value" since _ is a \w char).
+        pattern = r'\b' + _re.escape(alias) + r'\b'
+        text = _re.sub(pattern, replacement, text)
+    return text
+
+
+
 def _parse_dbml(path: str) -> dict:
     """Parse a ``.dbml`` file via *pydbml* and return the unified dict."""
     from pydbml import PyDBML  # pyrefly: ignore [missing-import]
 
-    text = Path(path).read_text(encoding="utf-8")
-    db = PyDBML(text)
+    raw_text = Path(path).read_text(encoding="utf-8")
+    text = _normalise_dbml_types(raw_text)
+    try:
+        db = PyDBML(text)
+    except Exception as exc:
+        # Re-raise with a human-readable message pointing to the file
+        raise ValueError(
+            f"Could not parse DBML file '{Path(path).name}': {exc}\n\n"
+            "Common causes:\n"
+            "  • Non-standard column type (e.g. 'string' → use 'varchar')\n"
+            "  • Column name with spaces — wrap in double-quotes: \"column name\"\n"
+            "  • Missing closing brace '}' for a Table block\n"
+            f"Original error: {exc}"
+        ) from exc
 
     # --- tables ---
     tables: dict = {}

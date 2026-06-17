@@ -380,62 +380,264 @@ def draw_relationship_network(
     out_dir: str,
     artifact_prefix: str | None = None,
 ) -> Optional[str]:
-    """Relationship network graph: tables as nodes, FK edges with integrity color.
+    """ER-style diagram: tables as boxes with column lists, FK connector lines.
 
-    Uses networkx (lazy import) → Phần 3a Schema Evaluation.
+    Mimics the classic ERD look — coloured header, column rows,
+    PK / FK markers, and styled connector lines with cardinality labels.
     """
-    try:
-        import networkx as nx
-    except ImportError:
-        logger.warning("networkx not installed — skipping relationship graph")
-        return None
-
     try:
         if not schema or not schema.relationships:
             return None
 
-        G = nx.DiGraph()
-        edge_colors = []
-        edge_labels = {}
-
-        # Collect integrity error tables for coloring
-        error_tables = set()
-        if schema.integrity_errors:
-            for err in schema.integrity_errors:
-                error_tables.add(err.affected_table)
-
+        # ── Collect table / column info ──────────────────────────────────────
+        tables_in_rels: set[str] = set()
         for rel in schema.relationships:
-            child = rel.child_table
-            parent = rel.parent_table
-            G.add_edge(child, parent)
-            # Color edge based on integrity
-            has_error = child in error_tables or parent in error_tables
-            edge_colors.append("#e74c3c" if has_error else "#27ae60")
-            label = rel.cardinality if rel.cardinality != "UNKNOWN" else ""
-            edge_labels[(child, parent)] = label
+            tables_in_rels.add(rel.child_table)
+            tables_in_rels.add(rel.parent_table)
 
-        if G.number_of_edges() == 0:
+        if not tables_in_rels:
             return None
 
-        fig, ax = plt.subplots(figsize=(max(8, G.number_of_nodes() * 1.5), 6))
-        pos = nx.spring_layout(G, seed=42, k=2)
-        nx.draw_networkx_nodes(G, pos, ax=ax, node_size=1200, node_color="#3498db", alpha=0.9)
-        nx.draw_networkx_labels(G, pos, ax=ax, font_size=9, font_weight="bold")
-        nx.draw_networkx_edges(
-            G, pos, ax=ax,
-            edge_color=edge_colors,
-            width=2,
-            arrows=True,
-            arrowsize=15,
-            connectionstyle="arc3,rad=0.1",
+        # Map table name → column list (from schema.tables)
+        col_map: dict[str, list[str]] = {}
+        for tbl in (schema.tables or []):
+            if tbl.name in tables_in_rels:
+                col_map[tbl.name] = list(tbl.columns)
+
+        # PK columns (from relationships parent_column)
+        pk_map: dict[str, set[str]] = {}
+        for rel in schema.relationships:
+            pk_map.setdefault(rel.parent_table, set()).add(rel.parent_column)
+
+        # FK columns (from relationships child_column)
+        fk_map: dict[str, set[str]] = {}
+        for rel in schema.relationships:
+            fk_map.setdefault(rel.child_table, set()).add(rel.child_column)
+
+        # Tables with integrity errors → red header
+        error_tables: set[str] = set()
+        for err in (schema.integrity_errors or []):
+            error_tables.add(err.affected_table)
+
+        # ── Layout constants (all in data coords) ────────────────────────────
+        BOX_W        = 3.2    # box width
+        HEADER_H     = 0.55   # header row height
+        ROW_H        = 0.35   # column row height
+        COL_PADDING  = 0.15   # left text padding
+        H_GAP        = 1.6    # horizontal gap between boxes
+        V_GAP        = 1.4    # vertical gap between boxes
+
+        # Decide grid layout: at most 3 columns
+        table_list = sorted(tables_in_rels)
+        n = len(table_list)
+        n_cols = min(3, n)
+        n_rows = (n + n_cols - 1) // n_cols
+
+        # Compute box heights
+        def box_height(tname: str) -> float:
+            cols = col_map.get(tname, [])
+            return HEADER_H + max(1, len(cols)) * ROW_H
+
+        # Assign grid positions (col_idx, row_idx) → anchor top-left (x, y)
+        positions: dict[str, tuple[float, float]] = {}
+        for i, tname in enumerate(table_list):
+            ci = i % n_cols
+            ri = i // n_cols
+            x = ci * (BOX_W + H_GAP)
+            # Y: stack downward using actual heights
+            y_start = 0.0
+            for prev_i in range(ri):
+                prev_t = table_list[prev_i * n_cols]  # use first col of that row for height
+                y_start -= box_height(prev_t) + V_GAP
+            positions[tname] = (x, y_start)
+
+        # ── Figure setup ─────────────────────────────────────────────────────
+        total_w = n_cols * (BOX_W + H_GAP)
+        max_rows_bh = sum(
+            box_height(table_list[ri * n_cols]) + V_GAP
+            for ri in range(n_rows)
         )
-        nx.draw_networkx_edge_labels(G, pos, edge_labels, ax=ax, font_size=7)
-        ax.set_title("Table Relationship Network")
+        fig_w = max(8, total_w + 1.0)
+        fig_h = max(5, abs(max_rows_bh) + 1.5)
+
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        ax.set_aspect("equal")
         ax.axis("off")
-        fig.tight_layout()
+        ax.set_xlim(-0.5, total_w + 0.5)
+        ax.set_ylim(-max_rows_bh - 1.0, 1.2)
+
+        # ── Draw table boxes ─────────────────────────────────────────────────
+        HEADER_FILL   = "#1565C0"   # blue header (normal)
+        ERROR_FILL    = "#C62828"   # red header (integrity error)
+        HEADER_TEXT   = "#FFFFFF"
+        BODY_FILL     = "#FAFAFA"
+        BODY_FILL_ALT = "#F0F4FF"   # alternating row
+        BORDER_COLOR  = "#90A4AE"
+        PK_COLOR      = "#1565C0"
+        FK_COLOR      = "#6A1B9A"
+        NORMAL_COLOR  = "#37474F"
+
+        def draw_table(ax, tname: str, x: float, y: float) -> dict:
+            """Draw one table box; return dict of column anchor points {col: (cx, cy)}."""
+            cols = col_map.get(tname, [])
+            pks  = pk_map.get(tname, set())
+            fks  = fk_map.get(tname, set())
+            h    = box_height(tname)
+
+            # Outer border
+            border = plt.Rectangle(
+                (x, y - h), BOX_W, h,
+                linewidth=1.5, edgecolor=BORDER_COLOR,
+                facecolor="white", zorder=2,
+            )
+            ax.add_patch(border)
+
+            # Header
+            hdr_fill = ERROR_FILL if tname in error_tables else HEADER_FILL
+            hdr = plt.Rectangle(
+                (x, y - HEADER_H), BOX_W, HEADER_H,
+                linewidth=0, edgecolor="none",
+                facecolor=hdr_fill, zorder=3,
+            )
+            ax.add_patch(hdr)
+            ax.text(
+                x + BOX_W / 2, y - HEADER_H / 2,
+                tname,
+                ha="center", va="center",
+                fontsize=9, fontweight="bold",
+                color=HEADER_TEXT, zorder=4,
+            )
+
+            # Column rows
+            anchor_y: dict[str, float] = {}
+            for idx, col in enumerate(cols):
+                row_y = y - HEADER_H - idx * ROW_H
+                row_fill = BODY_FILL if idx % 2 == 0 else BODY_FILL_ALT
+                row_rect = plt.Rectangle(
+                    (x, row_y - ROW_H), BOX_W, ROW_H,
+                    linewidth=0, edgecolor="none",
+                    facecolor=row_fill, zorder=2,
+                )
+                ax.add_patch(row_rect)
+
+                # Column label
+                is_pk = col in pks
+                is_fk = col in fks
+                if is_pk:
+                    prefix, col_color, col_weight = "★ ", PK_COLOR, "bold"
+                elif is_fk:
+                    prefix, col_color, col_weight = "◇ ", FK_COLOR, "normal"
+                else:
+                    prefix, col_color, col_weight = "  ", NORMAL_COLOR, "normal"
+                ax.text(
+                    x + COL_PADDING, row_y - ROW_H / 2,
+                    f"{prefix}{col}",
+                    ha="left", va="center",
+                    fontsize=7.5, color=col_color, fontweight=col_weight,
+                    zorder=4,
+                )
+
+                # Horizontal separator
+                ax.plot(
+                    [x, x + BOX_W], [row_y - ROW_H, row_y - ROW_H],
+                    color="#ECEFF1", linewidth=0.5, zorder=3,
+                )
+                anchor_y[col] = row_y - ROW_H / 2
+
+            if not cols:
+                ax.text(
+                    x + COL_PADDING, y - HEADER_H - ROW_H / 2,
+                    "  (no columns)",
+                    ha="left", va="center",
+                    fontsize=7.5, color="#B0BEC5", style="italic", zorder=4,
+                )
+
+            return anchor_y
+
+        col_anchors: dict[str, dict[str, float]] = {}
+        for tname, (x, y) in positions.items():
+            col_anchors[tname] = draw_table(ax, tname, x, y)
+
+        # ── Draw FK connector lines ───────────────────────────────────────────
+        EDGE_COLOR   = "#1976D2"
+        EDGE_COLOR_E = "#D32F2F"
+
+        cardinality_labels = {
+            "1:N": "1:N", "N:1": "N:1",
+            "1:1": "1:1", "N:M": "N:M",
+            "M:N": "M:N", None: "",
+        }
+
+        def midpoint_label(x1, y1, x2, y2, label: str, color: str) -> None:
+            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            ax.text(
+                mx, my, label,
+                ha="center", va="center",
+                fontsize=7, color=color,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1),
+                zorder=6,
+            )
+
+        for rel in schema.relationships:
+            child_t  = rel.child_table
+            parent_t = rel.parent_table
+            if child_t not in positions or parent_t not in positions:
+                continue
+
+            cx, cy = positions[child_t]
+            px, py = positions[parent_t]
+
+            # Anchor: right edge of child FK row → left edge of parent PK row
+            fk_col = rel.child_column
+            pk_col = rel.parent_column
+            fk_y = col_anchors.get(child_t, {}).get(fk_col, cy - box_height(child_t) / 2)
+            pk_y = col_anchors.get(parent_t, {}).get(pk_col, py - box_height(parent_t) / 2)
+
+            # Decide which side to connect from (left or right of box)
+            if px >= cx:  # parent to the right
+                x1, x2 = cx + BOX_W, px
+            else:         # parent to the left
+                x1, x2 = cx, px + BOX_W
+
+            has_err = child_t in error_tables or parent_t in error_tables
+            ec = EDGE_COLOR_E if has_err else EDGE_COLOR
+
+            # Bezier-style with matplotlib annotate arrow
+            ax.annotate(
+                "",
+                xy=(x2, pk_y),
+                xytext=(x1, fk_y),
+                arrowprops=dict(
+                    arrowstyle="-|>",
+                    color=ec,
+                    lw=1.5,
+                    connectionstyle="arc3,rad=0.15",
+                ),
+                zorder=5,
+            )
+
+            card = rel.cardinality or ""
+            if card and card != "UNKNOWN":
+                lbl = cardinality_labels.get(card, card)
+                midpoint_label(x1, fk_y, x2, pk_y, lbl, ec)
+
+        # ── Legend ───────────────────────────────────────────────────────────
+        legend_y = 0.98
+        fig.text(0.01, legend_y, "★ Primary Key   ◇ Foreign Key   ",
+                 fontsize=7.5, color="#546E7A",
+                 va="top", ha="left")
+        if error_tables:
+            fig.text(0.5, legend_y,
+                     f"🔴 Integrity issues: {', '.join(sorted(error_tables))}",
+                     fontsize=7.5, color=ERROR_FILL, va="top", ha="center")
+
+        fig.suptitle("Entity Relationship Diagram", fontsize=11,
+                     fontweight="bold", color="#1A237E", y=1.0)
+        fig.tight_layout(pad=0.5)
 
         file_name = _chart_file_name("relationship_network", artifact_prefix)
         return _save_chart(fig, out_dir, file_name)
+
     except Exception as exc:
         logger.warning("draw_relationship_network failed: %s", exc)
         return None

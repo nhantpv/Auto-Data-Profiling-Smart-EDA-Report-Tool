@@ -22,7 +22,13 @@ from ingestion.registry import load_any
 from ingestion.schema_reader import parse_schema
 from engines.profiling_engine import run_profiling, run_profiling_html
 from engines.anomaly_engine import run_anomaly_detection
-from engines.visualizer import attach_diagnostic_charts, attach_overview_charts
+from engines.visualizer import (
+    attach_diagnostic_charts,
+    attach_overview_charts,
+    draw_relationship_network,
+    draw_stacked_bar_issues,
+    draw_top_correlations_bar,
+)
 from engines.cross_table_engine import run_cross_table_analysis
 from engines.graph_engine import accepted_relationships_from_graph, reconstruct_graph
 from engines.schema_gate import apply_schema_gate
@@ -284,6 +290,58 @@ def _correlation_table_html(
     )
 
 
+_WARNING_TRANSLATIONS: dict[str, str] = {
+    # L3b planner
+    "L3b planner skipped": "Bộ lập kế hoạch tương quan đã bỏ qua",
+    "SMART_EDA_L3B_PROVIDER is not openai": "Chế độ deterministic — không dùng LLM để lập kế hoạch tương quan",
+    "planner_skipped_inside_running_event_loop": "Bộ lập kế hoạch bỏ qua (chạy trong async loop)",
+    # Numeric features
+    "Not enough numeric cross-table features for Pearson correlation":
+        "Không đủ cột số để tính tương quan Pearson giữa các bảng",
+    "No cross-table numeric correlations passed the MVP filters":
+        "Không có cặp tương quan nào vượt ngưỡng lọc tối thiểu",
+    "No cross-table numeric correlations passed the current filters":
+        "Không tìm thấy tương quan số nào đáng kể giữa các bảng",
+    # Join / fanout
+    "Unsafe fan-out detected": "Phát hiện fan-out không an toàn khi JOIN",
+    "Removed": "Đã loại bỏ",
+    "exact duplicate row": "hàng trùng lặp",
+    # Status codes
+    "skipped_no_direct_relationships": "Bỏ qua — không có quan hệ trực tiếp",
+    "skipped_no_tables": "Bỏ qua — không có bảng nào được nạp",
+    "completed": "Hoàn thành",
+}
+
+_STATUS_TRANSLATIONS: dict[str, str] = {
+    "completed": "Hoàn thành",
+    "skipped_no_direct_relationships": "Bỏ qua — thiếu quan hệ trực tiếp",
+    "skipped_no_tables": "Bỏ qua — không có bảng",
+    "skipped_no_schema": "Bỏ qua — chưa có schema",
+}
+
+_HIDE_WARNING_PREFIXES = (
+    "L3b planner skipped",          # debug-level count
+    "L3b planner produced",         # debug-level count
+    "planned_pair_skipped:",        # internal detail
+    "Fact table selected automatically",   # info-level
+)
+
+
+def _translate_warning(raw: str) -> str | None:
+    """Map a raw English warning string to a user-friendly Vietnamese string.
+
+    Returns None if the warning is debug/internal and should be hidden.
+    """
+    for prefix in _HIDE_WARNING_PREFIXES:
+        if raw.startswith(prefix):
+            return None
+    for key, translated in _WARNING_TRANSLATIONS.items():
+        if key in raw:
+            return translated + (f": {raw.split(':', 1)[1].strip()}" if ":" in raw else "")
+    # Keep non-matched warnings but prefix them clearly
+    return f"⚠ {raw}"
+
+
 def _cross_table_correlation_fragment(analysis: CrossTableAnalysis) -> str:
     planned = _correlation_table_html(
         "Planned Aggregate Correlations",
@@ -297,27 +355,37 @@ def _cross_table_correlation_fragment(analysis: CrossTableAnalysis) -> str:
     )
     body = planned + scanned
     if not body:
-        body = "<p>No cross-table numeric correlations passed the current filters for this run.</p>"
-    warnings = ""
-    if analysis.warnings:
-        warning_items = "".join(
-            f"<li>{html_lib.escape(warning)}</li>"
-            for warning in analysis.warnings[:8]
+        body = (
+            "<p>Không tìm thấy tương quan số đáng kể giữa các bảng trong lần chạy này. "
+            "Điều này thường xảy ra khi bộ dữ liệu chủ yếu chứa dữ liệu dạng văn bản (text) "
+            "và không có cột số để tính Pearson correlation.</p>"
         )
-        warnings = f"<ul class=\"insight-list\">{warning_items}</ul>"
+
+    warnings_html = ""
+    if analysis.warnings:
+        translated = [_translate_warning(w) for w in analysis.warnings[:12]]
+        visible = [t for t in translated if t is not None]
+        if visible:
+            items = "".join(f"<li>{html_lib.escape(w)}</li>" for w in visible)
+            warnings_html = f'<ul class="insight-list">{items}</ul>'
+
+    status_label = _STATUS_TRANSLATIONS.get(analysis.status, analysis.status)
+
     return (
-        "<section class=\"profile-viewer profile-export-panel\" aria-label=\"Cross-table correlations\">"
-        "<div class=\"profile-viewer-header\">"
-        "<div><p class=\"eyebrow\">Cross-Table</p><h2>Relationship-Aware Correlations</h2></div>"
-        f"<span class=\"profile-badge\">{html_lib.escape(analysis.status)}</span>"
+        "<!-- smart-eda-cross-correlation -->"
+        '<section class="profile-viewer profile-export-panel" aria-label="Cross-table correlations">'
+        '<div class="profile-viewer-header">'
+        '<div><p class="eyebrow">Cross-Table</p><h2>Tương Quan Liên Bảng</h2></div>'
+        f'<span class="profile-badge">{html_lib.escape(status_label)}</span>'
         "</div>"
-        "<div class=\"profile-export-body\">"
-        "<p>These are association checks across related tables. They are exported separately from YData because "
-        "YData profiles one DataFrame at a time.</p>"
+        '<div class="profile-export-body">'
+        "<p>Phân tích kiểm tra mức độ tương quan giữa các cột số ở các bảng có quan hệ FK/PK. "
+        "Hệ thống thực hiện JOIN an toàn (không gây fan-out) trước khi tính hệ số Pearson.</p>"
         f"{body}"
-        f"{warnings}"
+        f"{warnings_html}"
         "</div>"
         "</section>"
+        "<!-- /smart-eda-cross-correlation -->"
     )
 
 
@@ -394,11 +462,12 @@ def _profile_data_quality(
 
 
 def _prefix_issue(issue: AnomalyRecord, table_name: str) -> AnomalyRecord:
-    affected_column = (
-        f"{table_name}.{issue.affected_column}"
-        if issue.affected_column
-        else None
-    )
+    if issue.affected_column:
+        # Column-level anomaly: prefix "table.column"
+        affected_column = f"{table_name}.{issue.affected_column}"
+    else:
+        # Row-level anomaly (e.g. OUTLIER_ENSEMBLE): set to table_name so dispatcher knows the table
+        affected_column = table_name
     return issue.model_copy(update={
         "description": f"[{table_name}] {issue.description}",
         "affected_column": affected_column,
@@ -525,6 +594,8 @@ def run(
         profile_fragment,
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
+        all_table_names=[Path(str(data_path)).stem],
+        out_dir=str(out),
     )
     dq_path.write_text(findings.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
@@ -639,6 +710,29 @@ def run_multi(
         fact_table=schema_gate.fact_table,
     )
 
+    # Vẽ chart sơ đồ quan hệ và gắn vào verdict.dataset_meta.overview_charts
+    network_chart_file = draw_relationship_network(
+        schema_for_output, str(out), artifact_prefix="multi"
+    )
+    stacked_bar_file = draw_stacked_bar_issues(
+        verdict, str(out), artifact_prefix="multi"
+    )
+    corr_chart_file = draw_top_correlations_bar(
+        cross_table_analysis, str(out), artifact_prefix="multi"
+    )
+    extra_charts: dict[str, str] = {}
+    if network_chart_file:
+        extra_charts["relationship_network"] = network_chart_file
+    if stacked_bar_file:
+        extra_charts["stacked_bar_issues"] = stacked_bar_file
+    if corr_chart_file:
+        extra_charts["top_correlations"] = corr_chart_file
+    if extra_charts:
+        updated_meta = verdict.dataset_meta.model_copy(
+            update={"overview_charts": {**verdict.dataset_meta.overview_charts, **extra_charts}}
+        )
+        verdict = verdict.model_copy(update={"dataset_meta": updated_meta})
+
     dq_path = out / "data_quality_findings.json"
     schema_out = out / "schema_evaluation_findings.json"
     schema_gate_path = out / "schema_gate.json"
@@ -666,6 +760,8 @@ def run_multi(
         profile_fragment,
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
+        all_table_names=list(cross_tables.keys()),
+        out_dir=str(out),
     )
     dq_path.write_text(
         json.dumps(

@@ -508,13 +508,15 @@ def get_job_file(job_id: str, file_name: str):
     if file_name.endswith(".md"):
         return PlainTextResponse(path.read_text(encoding="utf-8"))
     if file_name.endswith(".html"):
-        return FileResponse(path, media_type="text/html", filename=file_name)
+        # Serve HTML files INLINE (not as attachment) so:
+        # - iframes can render them (statistical_profile_*.html)
+        # - "Open in new tab" links work correctly in browser
+        # smart_eda_report.html is also viewable inline this way
+        return HTMLResponse(path.read_text(encoding="utf-8"))
     if file_name.endswith(".csv"):
         return FileResponse(path, media_type="text/csv", filename=file_name)
     if file_name.endswith(".png"):
         return FileResponse(path, media_type="image/png", filename=file_name)
-    if file_name.endswith(".html"):
-        return FileResponse(path, media_type="text/html", filename=file_name)
     return FileResponse(path, media_type="application/json", filename=file_name)
 
 

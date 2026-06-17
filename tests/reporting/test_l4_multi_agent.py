@@ -1,3 +1,4 @@
+"""Tests cho L4 Structured Multi-Agent pipeline."""
 import json
 
 from ontology.models import (
@@ -83,40 +84,54 @@ def test_call_openai_uses_chat_completions_payload(monkeypatch):
 
 
 def test_multi_agent_l4_deterministic_fallback_passes_guardrail(monkeypatch):
+    """Fallback deterministc: không cần LLM, vẫn trả HTML hợp lệ."""
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
     findings, verdict = _sample_l4_inputs()
 
     text, guardrail, result = generate_multi_agent_report(findings, verdict)
 
-    assert "L4 Guarded EDA Report" in text
-    assert "Evidence Snapshot" in text
-    assert "Interpretation" in text
-    assert "Suggested Follow-up" in text
+    # Structured pipeline trả HTML với các element tiếng Việt
+    assert "executive-summary" in text
+    assert "data.csv" in text
     assert guardrail.status == "passed"
-    assert result.analyst_outputs[0].guardrail_passed is True
-    assert guardrail.agents
+    assert result.analyst_table_results[0].guardrail_passed is True
     assert result.guardrail_report["agents"]
 
 
-def test_multi_agent_l4_retries_llm_until_guardrail_passes(monkeypatch):
+def test_multi_agent_l4_retries_llm_until_valid_json(monkeypatch):
+    """LLM trả JSON hợp lệ sau lần retry — analyst và editor đều dùng JSON schema mới."""
     monkeypatch.setattr(l4_report, "_llm_enabled", lambda: True)
     calls = {"analyst": 0, "editor": 0}
+
+    analyst_json = json.dumps({
+        "table_name": "default",
+        "table_overview": "Bảng có 1 vấn đề.",
+        "column_issues": [{
+            "column_name": "age",
+            "severity": "WARN",
+            "problem": "Thiếu 1 giá trị (10.0%).",
+            "ml_consequence": "Có thể ảnh hưởng đến các mô hình Linear Regression.",
+            "suggested_action": "Nên xem xét imputation.",
+            "evidence_ref": None,
+        }],
+    })
+
+    editor_json = json.dumps({
+        "executive_summary": "Dataset data.csv có 10 dòng và 2 cột.",
+        "feature_usability": [{"column": "age", "status": "needs_work", "reason": "Thiếu giá trị."}],
+        "fix_priority": ["default.age"],
+        "cross_table_evaluation": None,
+        "verdict_explanation": "Cần xem xét lại.",
+    })
 
     async def fake_call(prompt, instructions, model_env, default_model):
         if model_env == "SMART_EDA_L4_ANALYST_MODEL":
             calls["analyst"] += 1
             if calls["analyst"] == 1:
-                return "Dataset has `999` rows."
-            return "### `MISSINGNESS`\n\nAffected scope: `age`. Affected rows: `1`."
+                return "invalid json"
+            return analyst_json
         calls["editor"] += 1
-        if calls["editor"] == 1:
-            return '{"executive_summary":"Dataset has 999 rows","verdict_explanation":"Needs review","priority_ranking":"MISSINGNESS"}'
-        return (
-            "```json\n"
-            '{"executive_summary":"Dataset `data.csv` has `10` rows",'
-            '"verdict_explanation":"Needs review","priority_ranking":"MISSINGNESS"}'
-            "\n```"
-        )
+        return editor_json
 
     monkeypatch.setattr(l4_report, "_call_openai_async", fake_call)
     findings, verdict = _sample_l4_inputs()
@@ -124,12 +139,13 @@ def test_multi_agent_l4_retries_llm_until_guardrail_passes(monkeypatch):
     _text, guardrail, result = generate_multi_agent_report(findings, verdict)
 
     assert guardrail.status == "passed"
-    assert result.analyst_outputs[0].retry_count == 1
-    assert result.editor_output.retry_count == 1
-    assert guardrail.agents[-1]["agent"] == "editor"
+    # Analyst phải retry 1 lần do invalid json lần đầu
+    assert result.analyst_table_results[0].retry_count == 1
+    assert result.guardrail_report["agents"]
 
 
 def test_multi_agent_l4_records_llm_errors_on_fallback(monkeypatch):
+    """Khi LLM lỗi liên tục → fallback deterministc, guardrail vẫn pass."""
     monkeypatch.setattr(l4_report, "_llm_enabled", lambda: True)
 
     async def fake_call(_prompt, _instructions, _model_env, _default_model):
@@ -141,14 +157,13 @@ def test_multi_agent_l4_records_llm_errors_on_fallback(monkeypatch):
     _text, guardrail, result = generate_multi_agent_report(findings, verdict)
 
     assert guardrail.status == "passed"
-    assert guardrail.used_fallback is True
     assert result.used_fallback is True
-    assert guardrail.llm_errors
-    assert guardrail.agents
-    assert any("HTTP 400 bad request" in error for error in guardrail.llm_errors)
+    llm_errors = result.guardrail_report.get("llm_errors", [])
+    assert any("HTTP 400 bad request" in error for error in llm_errors)
 
 
-def test_multi_agent_l4_renders_full_appendix_html(monkeypatch):
+def test_multi_agent_l4_renders_appendix_html(monkeypatch):
+    """Phụ lục HTML được render đúng khi có nhiều issues."""
     monkeypatch.delenv("SMART_EDA_L4_PROVIDER", raising=False)
     meta = DatasetMeta(
         file_name="data.csv",

@@ -2,9 +2,11 @@
   const tabs = Array.from(document.querySelectorAll("[data-tab]"));
   const panels = Array.from(document.querySelectorAll(".tab-content"));
   const validIds = new Set(tabs.map((tab) => tab.dataset.tab));
+  // Tab đầu tiên là fallback khi không có hash hoặc hash không hợp lệ
+  const firstTabId = tabs.length > 0 ? tabs[0].dataset.tab : "overview";
 
   function showTab(id, options) {
-    const nextId = validIds.has(id) ? id : "ai";
+    const nextId = validIds.has(id) ? id : firstTabId;
     tabs.forEach((tab) => {
       const active = tab.dataset.tab === nextId;
       tab.classList.toggle("active", active);

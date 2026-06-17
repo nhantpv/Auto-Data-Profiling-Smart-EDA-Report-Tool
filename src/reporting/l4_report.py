@@ -1,3 +1,14 @@
+"""L4 Multi-Agent Report — Luồng duy nhất: Structured JSON Table-based.
+
+Kiến trúc:
+  dispatch_by_table() → _run_table_analyst() × N (song song) → _run_structured_editor()
+  → Python Renderer (JSON → HTML)
+
+LLM output là tiếng Việt. JSON chỉ là ngôn ngữ nội bộ giữa các agent;
+người dùng chỉ thấy HTML đã được render.
+
+Xem ARCHITECT v5.4 §5.9 và implementation_plan.md.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -11,22 +22,17 @@ from typing import Any
 from guardrail import (
     GuardrailReport,
     validate_narrative,
-    verify_analyst_output,
-    verify_editor_output,
 )
 from ontology.models import (
-    AnalystOutput,
     AnalystTableResult,
     ColumnIssue,
     CrossTableAnalysis,
     DataQualityFindings,
     DatasetVerdict,
     DispatchResult,
-    EditorOutput,
     EditorStructuredOutput,
     FeatureUsabilityItem,
     IntegrityError,
-    IssueCluster,
     MultiAgentResult,
     SEVERITY_ORDER,
     SchemaEvaluationFindings,
@@ -34,15 +40,15 @@ from ontology.models import (
     Severity,
     TableCluster,
 )
-from reporting.dispatcher import dispatch, dispatch_by_table
+from reporting.dispatcher import dispatch_by_table
 
+
+# ============================================================
+# Shared Utilities
+# ============================================================
 
 def _pct(value: float) -> str:
     return f"{value * 100:.1f}%"
-
-
-def _issue_scope(affected_column: str | None) -> str:
-    return f"`{affected_column}`" if affected_column else "dataset"
 
 
 def _severity_rank(severity: Severity) -> int:
@@ -53,32 +59,8 @@ def _effective_severity(record: Any) -> Severity:
     return record.compound_severity if record.compound_severity is not None else record.severity
 
 
-def _agent_detail(
-    agent: str,
-    report: GuardrailReport,
-    retry_count: int,
-    cluster: str | None = None,
-    detail: str | None = None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "agent": agent,
-        "status": report.status,
-        "provider": report.provider,
-        "used_fallback": report.used_fallback,
-        "retry_count": retry_count,
-        "violations": [
-            violation.model_dump(mode="json")
-            for violation in report.violations
-        ],
-    }
-    if cluster is not None:
-        payload["cluster"] = cluster
-    if detail is not None:
-        payload["detail"] = detail
-    return payload
-
-
 def _strip_json_fences(text: str) -> str:
+    """Loại bỏ markdown code fences (```json ... ```) nếu có."""
     stripped = text.strip()
     if not stripped.startswith("```"):
         return stripped
@@ -91,43 +73,8 @@ def _strip_json_fences(text: str) -> str:
     return stripped
 
 
-def _compact_payload(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None,
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "dataset": verdict.dataset_meta.model_dump(),
-        "verdict": verdict.verdict.value,
-        "verdict_rationale": verdict.verdict_rationale,
-        "summary": verdict.summary.model_dump(),
-        "top_issues": [issue.model_dump(exclude_none=True) for issue in verdict.top_issues],
-        "risk_score": verdict.risk_score,
-        "calibration_status": verdict.calibration_status,
-        "data_quality_issues": [],
-        "schema_issues": [],
-        "relationships": [],
-    }
-    if findings is not None:
-        payload["columns"] = {
-            name: stats.model_dump(exclude_none=True)
-            for name, stats in findings.columns.items()
-        }
-        payload["data_quality_issues"] = [
-            issue.model_dump(exclude_none=True, exclude={"top_10_samples"})
-            for issue in findings.anomalies[:10]
-        ]
-    if schema is not None:
-        payload["schema"] = {
-            "meta": schema.schema_meta.model_dump(),
-            "tables": [table.model_dump() for table in schema.tables],
-        }
-        payload["schema_issues"] = [
-            issue.model_dump(exclude_none=True, exclude={"top_10_samples"})
-            for issue in schema.integrity_errors[:10]
-        ]
-        payload["relationships"] = [rel.model_dump() for rel in schema.relationships[:10]]
-    return payload
+def _llm_enabled() -> bool:
+    return os.getenv("SMART_EDA_L4_PROVIDER", "deterministic").strip().lower() == "openai"
 
 
 def _extract_openai_text(payload: dict[str, Any]) -> str:
@@ -162,7 +109,7 @@ def _extract_chat_completion_text(payload: dict[str, Any]) -> str:
 def _call_openai(prompt: str, instructions: str, model_env: str, default_model: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set")
+        raise RuntimeError("OPENAI_API_KEY chưa được thiết lập")
 
     model = os.getenv(model_env, default_model)
     max_tokens = int(os.getenv("SMART_EDA_L4_MAX_TOKENS", "2200"))
@@ -189,7 +136,7 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
         }
         extractor = _extract_openai_text
     else:
-        raise RuntimeError(f"Unsupported SMART_EDA_L4_API_MODE: {api_mode}")
+        raise RuntimeError(f"SMART_EDA_L4_API_MODE không hợp lệ: {api_mode}")
 
     request = urllib.request.Request(
         endpoint,
@@ -205,16 +152,12 @@ def _call_openai(prompt: str, instructions: str, model_env: str, default_model: 
             response_payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"OpenAI L4 request failed on {api_mode}: HTTP {exc.code} {body}") from exc
+        raise RuntimeError(f"OpenAI L4 request thất bại ({api_mode}): HTTP {exc.code} {body}") from exc
 
     text = extractor(response_payload)
     if not text:
-        raise RuntimeError(f"OpenAI L4 {api_mode} response did not include text")
+        raise RuntimeError(f"OpenAI L4 {api_mode} response không chứa text")
     return text
-
-
-def _llm_enabled() -> bool:
-    return os.getenv("SMART_EDA_L4_PROVIDER", "deterministic").strip().lower() == "openai"
 
 
 async def _call_openai_async(
@@ -226,268 +169,24 @@ async def _call_openai_async(
     return await asyncio.to_thread(_call_openai, prompt, instructions, model_env, default_model)
 
 
-def _render_cluster_markdown(cluster: IssueCluster) -> str:
-    affected_counts = [
-        int(issue.get("affected_count", 0) or 0)
-        for issue in cluster.issues
-    ]
-    largest_affected = max(affected_counts) if affected_counts else 0
-    dimensions = sorted({
-        str(dimension)
-        for issue in cluster.issues
-        for dimension in issue.get("dq_dimensions", [])
-        if dimension
-    })
-    impacts = sorted({
-        str(impact)
-        for issue in cluster.issues
-        for impact in issue.get("ml_impact", [])
-        if impact
-    })
-    lines = [
-        f"### `{cluster.issue_type}`",
-        "",
-        "#### Evidence Snapshot",
-        "",
-        f"- Cluster finding count: `{len(cluster.issues)}`.",
-        f"- Maximum effective severity: `{cluster.max_severity}`.",
-        f"- Largest affected-row count in a single finding: `{largest_affected}`.",
-    ]
-    if cluster.affected_columns:
-        lines.append("- Affected scope: " + ", ".join(f"`{column}`" for column in cluster.affected_columns) + ".")
-    if dimensions:
-        lines.append("- Data-quality dimensions recorded in evidence: " + ", ".join(f"`{dimension}`" for dimension in dimensions) + ".")
-    if impacts:
-        lines.append("- Machine-learning impact labels recorded in evidence: " + ", ".join(f"`{impact}`" for impact in impacts) + ".")
-    lines.extend([
-        "",
-        "#### Interpretation",
-        "",
-        f"- The cluster groups deterministic evidence for `{cluster.issue_type}` with maximum effective severity `{cluster.max_severity}`.",
-        "- Review the scoped columns or tables before using this dataset for modeling, reporting, joins, or downstream business analysis.",
-        "- Treat this section as a triage summary from observed evidence, not as a causal explanation.",
-        "",
-        "#### Evidence Table",
-        "",
-        "| Severity | Scope | Affected |",
-        "| --- | --- | --- |",
-    ])
-    for issue in cluster.issues[:10]:
-        severity = issue.get("compound_severity") or issue.get("severity") or cluster.max_severity
-        scope = issue.get("affected_column") or issue.get("affected_table") or "dataset"
-        affected_count = issue.get("affected_count", 0)
-        affected_percent = issue.get("affected_percent")
-        if affected_percent is None:
-            affected_text = f"`{affected_count}`"
-        else:
-            affected_text = f"`{affected_count}` (`{_pct(float(affected_percent))}`)"
-        lines.append(f"| `{severity}` | {_issue_scope(scope if scope != 'dataset' else None)} | {affected_text} |")
-    lines.extend([
-        "",
-        "#### Suggested Follow-up",
-        "",
-        "- Confirm whether the affected records should be corrected, filtered, or documented before downstream use.",
-        "- Re-run the report after remediation so the verdict and issue counts can be compared against this evidence snapshot.",
-        "",
-    ])
-    return "\n".join(lines)
-
-
-async def _run_analyst(
-    cluster: IssueCluster,
-    llm_errors: list[str] | None = None,
-) -> tuple[AnalystOutput, dict[str, Any]]:
-    fallback_markdown = _render_cluster_markdown(cluster)
-    llm_enabled = _llm_enabled()
-
-    if llm_enabled:
-        prompt = (
-            "Write one detailed Markdown section for this issue cluster. "
-            "Use only this JSON slice. Put every numeric value and every field/table/issue reference in backticks. "
-            "Do not use numbered lists, ordinal numbers, or extra counts that are not present in the JSON slice.\n\n"
-            "Required structure:\n"
-            "- Heading with the issue type.\n"
-            "- Evidence Snapshot: severity, finding count, scope, affected-row counts, dimensions or impact labels if present.\n"
-            "- Interpretation: explain what the data scientist should inspect and why this matters for analysis.\n"
-            "- Evidence Table: include severity, scope, affected count, and affected percent when present.\n"
-            "- Suggested Follow-up: concrete analyst checks that do not invent new thresholds or facts.\n\n"
-            f"{json.dumps(cluster.json_slice, ensure_ascii=False, indent=2)}"
-        )
-        for attempt in range(1, 4):
-            try:
-                markdown = await _call_openai_async(
-                    prompt,
-                    (
-                        "You are an EDA Analyst agent. Explain only the assigned issue cluster in a detailed but grounded way. "
-                        "Do not invent numbers, thresholds, columns, tables, or recommendations. "
-                        "Write a heading plus structured sections and bullets; bullets must not start with numbers. "
-                        "Use table.column references only when that exact relationship exists in evidence. "
-                        "Do not use causal language such as causes, caused by, causing, leads to, "
-                        "results in, or due to."
-                    ),
-                    "SMART_EDA_L4_ANALYST_MODEL",
-                    "gpt-4o-mini",
-                )
-            except Exception as exc:
-                if llm_errors is not None:
-                    llm_errors.append(
-                        f"analyst:{cluster.issue_type}:attempt_{attempt}: {exc}"
-                    )
-                continue
-            report = verify_analyst_output(
-                markdown,
-                cluster.json_slice,
-                provider="openai-analyst",
-                used_fallback=False,
-            )
-            if report.status == "passed":
-                output = AnalystOutput(
-                    cluster_type=cluster.issue_type,
-                    markdown=markdown,
-                    guardrail_passed=True,
-                    retry_count=attempt - 1,
-                )
-                return output, _agent_detail(
-                    "analyst",
-                    report,
-                    attempt - 1,
-                    cluster=cluster.issue_type,
-                )
-            if llm_errors is not None:
-                violation_checks = ",".join(violation.check for violation in report.violations)
-                llm_errors.append(
-                    f"analyst:{cluster.issue_type}:attempt_{attempt}: guardrail_failed:{violation_checks}"
-                )
-
-    report = verify_analyst_output(
-        fallback_markdown,
-        cluster.json_slice,
-        provider="deterministic-analyst",
-        used_fallback=llm_enabled,
-    )
-
-    output = AnalystOutput(
-        cluster_type=cluster.issue_type,
-        markdown=fallback_markdown,
-        guardrail_passed=report.status == "passed",
-        retry_count=3 if llm_enabled else 0,
-    )
-    return output, _agent_detail(
-        "analyst",
-        report,
-        output.retry_count,
-        cluster=cluster.issue_type,
-    )
-
-
 def _cross_table_summary(cross_table_analysis: CrossTableAnalysis | None) -> str | None:
     if cross_table_analysis is None:
         return None
     if cross_table_analysis.status != "completed":
-        return f"Cross-table analysis status is {cross_table_analysis.status}."
+        return f"Phân tích cross-table có trạng thái: {cross_table_analysis.status}."
     if cross_table_analysis.planned_correlations:
         top = cross_table_analysis.planned_correlations[0]
         return (
-            f"L3b validated planned cross-table pair {top.left_feature} vs {top.right_feature}. "
-            "The narrative treats it as association, not causation."
+            f"L3b đã xác nhận cặp cross-table theo kế hoạch: {top.left_feature} và {top.right_feature}. "
+            "Mối quan hệ được xem là tương quan, không phải nhân quả."
         )
     if cross_table_analysis.correlations:
         top = cross_table_analysis.correlations[0]
         return (
-            f"Cross-table analysis used fact table {cross_table_analysis.fact_table} "
-            f"and found strongest Pearson pair {top.left_feature} vs {top.right_feature}."
+            f"Phân tích cross-table dùng fact table {cross_table_analysis.fact_table}. "
+            f"Cặp Pearson mạnh nhất: {top.left_feature} và {top.right_feature}."
         )
-    return f"Cross-table analysis used fact table {cross_table_analysis.fact_table}."
-
-
-async def _run_editor(
-    verdict: DatasetVerdict,
-    analyst_outputs: list[AnalystOutput],
-    cross_table_analysis: CrossTableAnalysis | None,
-    llm_errors: list[str] | None = None,
-) -> tuple[EditorOutput, dict[str, Any]]:
-    meta = verdict.dataset_meta
-    fallback = EditorOutput(
-        executive_summary=(
-            f"Dataset `{meta.file_name}` has `{meta.n}` rows and `{meta.n_var}` columns. "
-            f"The deterministic verdict is `{verdict.verdict.value}` with `{verdict.summary.total_issues}` total issues. "
-            "Read this report as an evidence-backed triage note: start with the verdict, then inspect the ranked issue clusters and any schema or cross-table notes."
-        ),
-        verdict_explanation=verdict.verdict_rationale,
-        cross_table_evaluation=_cross_table_summary(cross_table_analysis),
-        priority_ranking=(
-            "Priority issue clusters: "
-            + ", ".join(f"`{output.cluster_type}`" for output in analyst_outputs)
-            if analyst_outputs
-            else "No WARN, HIGH, or CRITICAL issue cluster was dispatched to Analyst review."
-        ),
-    )
-    llm_enabled = _llm_enabled()
-    editor = fallback
-
-    if llm_enabled:
-        payload = {
-            "verdict": verdict.model_dump(mode="json"),
-            "analyst_sections": [output.markdown for output in analyst_outputs],
-            "cross_table_analysis": cross_table_analysis.model_dump(mode="json") if cross_table_analysis else None,
-        }
-        prompt = (
-            "Write JSON with keys executive_summary, verdict_explanation, cross_table_evaluation, priority_ranking. "
-            "Every value must be a detailed string, not an object and not an array. "
-            "Use only the provided evidence. The executive_summary should be several sentences. "
-            "The verdict_explanation should explain the decision signal and the most important evidence. "
-            "The priority_ranking should name the issue clusters in practical review order. "
-            "For cross_table_evaluation, write a comprehensive narrative explaining the cross-table correlations and their business meaning if they exist. "
-            "If no cross-table analysis is available, return a brief statement.\n\n"
-            f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
-        )
-        for attempt in range(1, 4):
-            try:
-                text = await _call_openai_async(
-                    prompt,
-                    (
-                        "You are an EDA Editor agent. Return valid compact JSON only. "
-                        "The JSON values must be strings. Do not return nested objects or arrays. "
-                        "Do not invent numbers, columns, tables, relationships, or thresholds. "
-                        "Write enough detail for a data scientist to understand what to inspect first. "
-                        "Do not use causal language such as causes, caused by, causing, leads to, "
-                        "results in, or due to."
-                    ),
-                    "SMART_EDA_L4_EDITOR_MODEL",
-                    "gpt-4o",
-                )
-                candidate = EditorOutput.model_validate_json(_strip_json_fences(text))
-            except Exception as exc:
-                if llm_errors is not None:
-                    llm_errors.append(f"editor:attempt_{attempt}: {exc}")
-                continue
-            report = verify_editor_output(
-                candidate.model_dump(mode="json"),
-                [output.markdown for output in analyst_outputs],
-                verdict,
-                cross_table_analysis=cross_table_analysis,
-                provider="openai-editor",
-                used_fallback=False,
-            )
-            if report.status == "passed":
-                candidate.guardrail_passed = True
-                candidate.retry_count = attempt - 1
-                return candidate, _agent_detail("editor", report, attempt - 1)
-            if llm_errors is not None:
-                violation_checks = ",".join(violation.check for violation in report.violations)
-                llm_errors.append(f"editor:attempt_{attempt}: guardrail_failed:{violation_checks}")
-
-    report = verify_editor_output(
-        fallback.model_dump(mode="json"),
-        [output.markdown for output in analyst_outputs],
-        verdict,
-        cross_table_analysis=cross_table_analysis,
-        provider="deterministic-editor",
-        used_fallback=llm_enabled,
-    )
-    fallback.guardrail_passed = report.status == "passed"
-    fallback.retry_count = 3 if llm_enabled else 0
-    return fallback, _agent_detail("editor", report, fallback.retry_count)
+    return f"Phân tích cross-table dùng fact table {cross_table_analysis.fact_table}."
 
 
 def _appendix_scope(record: Any) -> str:
@@ -509,7 +208,8 @@ def _render_appendix_html(
     findings: DataQualityFindings | None,
     schema: SchemaEvaluationFindings | None,
 ) -> str:
-    covered_types = {cluster.issue_type for cluster in dispatch_result.top_clusters}
+    """Phụ lục: các findings mức WARN+ chưa được Analyst expand."""
+    covered_tables = {tc.table_name for tc in dispatch_result.table_clusters}
     warn_rank = _severity_rank(Severity.WARN)
     rows: list[tuple[int, str, str, str, int, str]] = []
 
@@ -521,8 +221,6 @@ def _render_appendix_html(
         issue_type = _appendix_type(record)
         severity = _effective_severity(record)
         if _severity_rank(severity) < warn_rank:
-            continue
-        if issue_type in covered_types:
             continue
         source = "schema" if isinstance(record, IntegrityError) else "data_quality"
         rows.append((
@@ -550,11 +248,11 @@ def _render_appendix_html(
     )
     return (
         "<section class=\"appendix\">"
-        "<h2>Appendix</h2>"
-        "<p>Lower-ranked findings not expanded by Analyst agents.</p>"
+        "<h2>Phụ lục — Các Vấn Đề Chưa Được Phân Tích Sâu</h2>"
+        "<p>Các findings mức WARN trở lên chưa được Analyst agent phân tích chi tiết.</p>"
         "<table>"
         "<thead><tr>"
-        "<th>Severity</th><th>Type</th><th>Scope</th><th>Affected</th><th>Source</th>"
+        "<th>Mức độ</th><th>Loại</th><th>Phạm vi</th><th>Số dòng ảnh hưởng</th><th>Nguồn</th>"
         "</tr></thead>"
         f"<tbody>{body}</tbody>"
         "</table>"
@@ -562,353 +260,71 @@ def _render_appendix_html(
     )
 
 
-def render_multi_agent_markdown(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
-    meta = verdict.dataset_meta
-    editor = result.editor_output or EditorOutput()
-    lines = [
-        "# L4 Guarded EDA Report",
-        "",
-        "## Executive Summary",
-        "",
-        editor.executive_summary or (
-            f"Dataset {meta.file_name} has {meta.n} rows and {meta.n_var} columns."
-        ),
-        "",
-        "## Decision Rationale",
-        "",
-        editor.verdict_explanation or verdict.verdict_rationale,
-        "",
-        "## Data Quality Analysis",
-        "",
-    ]
-    if result.analyst_outputs:
-        for output in result.analyst_outputs:
-            lines.extend([output.markdown, ""])
-    else:
-        lines.extend(["No WARN, HIGH, or CRITICAL issues were dispatched to Analyst sections.", ""])
-
-    if editor.cross_table_evaluation:
-        lines.extend([
-            "## Cross-table Evaluation",
-            "",
-            editor.cross_table_evaluation,
-            "",
-        ])
-
-    if editor.priority_ranking:
-        lines.extend([
-            "## Priority Ranking",
-            "",
-            editor.priority_ranking,
-            "",
-        ])
-
-    lines.extend([
-        "## Guardrail Statement",
-        "",
-        "This report is generated only from deterministic JSON evidence. Numeric values and backticked fields are checked against the evidence set before the file is written.",
-        "",
-    ])
-    return "\n".join(lines)
-
-
-async def run_multi_agent_l4(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None = None,
-    cross_table_analysis: CrossTableAnalysis | None = None,
-) -> tuple[str, GuardrailReport, MultiAgentResult]:
-    dispatch_result = dispatch(
-        findings.anomalies if findings is not None else [],
-        schema.integrity_errors if schema is not None else [],
-    )
-    llm_errors: list[str] = []
-    analyst_results = await asyncio.gather(*[
-        _run_analyst(cluster, llm_errors)
-        for cluster in dispatch_result.top_clusters
-    ])
-    analyst_outputs = [output for output, _detail in analyst_results]
-    agent_details = [detail for _output, detail in analyst_results]
-    editor_output, editor_detail = await _run_editor(
-        verdict,
-        list(analyst_outputs),
-        cross_table_analysis,
-        llm_errors,
-    )
-    agent_details.append(editor_detail)
-    llm_enabled = _llm_enabled()
-    used_fallback = (
-        not llm_enabled
-        or any(output.retry_count >= 3 for output in analyst_outputs)
-        or editor_output.retry_count >= 3
-    )
-    result = MultiAgentResult(
-        analyst_outputs=list(analyst_outputs),
-        editor_output=editor_output,
-        appendix_html=_render_appendix_html(dispatch_result, findings, schema),
-        guardrail_report={},
-        used_fallback=used_fallback,
-    )
-    text = render_multi_agent_markdown(result, verdict)
-    report = validate_narrative(
-        text,
-        findings,
-        verdict,
-        schema,
-        cross_table_analysis,
-        provider="multi-agent",
-        used_fallback=any(a.get("used_fallback", False) for a in agent_details),
-    )
-    report.llm_errors = llm_errors
-    report.agents = agent_details
-    
-    # If the combined narrative still fails the guardrail, do a full fallback
-    if report.status != "passed":
-        text = render_deterministic_l4_report(findings, verdict, schema)
-        report = validate_narrative(
-            text,
-            findings,
-            verdict,
-            schema,
-            cross_table_analysis,
-            provider="deterministic-fallback",
-            used_fallback=True,
-        )
-        report.llm_errors = llm_errors
-        report.agents = agent_details
-        result.used_fallback = True
-    else:
-        result.used_fallback = any(a.get("used_fallback", False) for a in agent_details)
-    result.guardrail_report = report.model_dump(mode="json")
-    return text, report, result
-
-
-def _run_multi_agent_sync(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None,
-    cross_table_analysis: CrossTableAnalysis | None = None,
-) -> tuple[str, GuardrailReport, MultiAgentResult]:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(run_multi_agent_l4(findings, verdict, schema, cross_table_analysis))
-
-    # FastAPI currently calls the pipeline synchronously. If a caller is already
-    # in an event loop, avoid nested asyncio.run() and use deterministic fallback.
-    text = render_deterministic_l4_report(findings, verdict, schema)
-    report = validate_narrative(
-        text,
-        findings,
-        verdict,
-        schema,
-        cross_table_analysis,
-        provider="deterministic-fallback",
-        used_fallback=True,
-    )
-    report.llm_errors = [
-        "L4 was called from an active event loop; deterministic fallback was used."
-    ]
-    report.agents = [
-        _agent_detail(
-            "runtime",
-            report,
-            retry_count=0,
-            detail="active_event_loop_deterministic_fallback",
-        )
-    ]
-    result = MultiAgentResult(
-        editor_output=EditorOutput(
-            executive_summary=f"Dataset {verdict.dataset_meta.file_name} has {verdict.dataset_meta.n} rows.",
-            verdict_explanation=verdict.verdict_rationale,
-        ),
-        guardrail_report=report.model_dump(mode="json"),
-        used_fallback=True,
-    )
-    return text, report, result
-
-
-def generate_multi_agent_report(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None = None,
-    cross_table_analysis: CrossTableAnalysis | None = None,
-) -> tuple[str, GuardrailReport, MultiAgentResult]:
-    return _run_multi_agent_sync(findings, verdict, schema, cross_table_analysis)
-
-
-def render_deterministic_l4_report(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None = None,
-) -> str:
-    meta = verdict.dataset_meta
-    lines = [
-        "# L4 Guarded EDA Report",
-        "",
-        "## Executive Summary",
-        "",
-        f"Dataset `{meta.file_name}` has `{meta.n}` rows and `{meta.n_var}` columns.",
-        f"The deterministic verdict is `{verdict.verdict.value}` with `{verdict.summary.total_issues}` total issues.",
-        f"Missing cells account for `{_pct(meta.p_cells_missing)}` and duplicate rows account for `{_pct(meta.p_duplicates)}`.",
-        "",
-        "## Decision Rationale",
-        "",
-        verdict.verdict_rationale,
-        "",
-    ]
-    if meta.is_sampled:
-        lines.extend([
-            "## Sampling",
-            "",
-            f"The input had `{meta.original_n}` original rows. Profiling used `{meta.sample_n}` rows with `{meta.sample_method}` sampling and seed `{meta.sample_seed}`.",
-            "",
-        ])
-
-    if verdict.top_issues:
-        lines.extend([
-            "## Top Issues Driving The Verdict",
-            "",
-            "| Effective Severity | Type | Scope | Affected Rows |",
-            "| --- | --- | --- | --- |",
-        ])
-        for issue in verdict.top_issues[:10]:
-            scope = issue.affected_column or issue.affected_table or "dataset"
-            lines.append(
-                f"| `{issue.effective_severity.value}` | `{issue.issue_type}` | {_issue_scope(scope if scope != 'dataset' else None)} | `{issue.affected_count}` |"
-            )
-        lines.append("")
-
-    if findings is not None:
-        lines.extend([
-            "## Data Quality Issues",
-            "",
-            "| Severity | Type | Scope | Affected |",
-            "| --- | --- | --- | --- |",
-        ])
-        if findings.anomalies:
-            for issue in findings.anomalies[:10]:
-                lines.append(
-                    f"| `{issue.severity.value}` | `{issue.issue_type}` | {_issue_scope(issue.affected_column)} | "
-                    f"`{issue.affected_count}` (`{_pct(issue.affected_percent)}`) |"
-                )
-        else:
-            lines.append("| `INFO` | none | dataset | `0` (`0.0%`) |")
-        lines.append("")
-
-    if schema is not None:
-        lines.extend([
-            "## Schema And Relationship Issues",
-            "",
-            f"Schema source `{schema.schema_meta.schema_file}` covers `{schema.schema_meta.total_tables}` tables "
-            f"and `{schema.schema_meta.total_relationships}` relationships.",
-            "",
-            "| Severity | Type | Scope | Affected Rows |",
-            "| --- | --- | --- | --- |",
-        ])
-        if schema.integrity_errors:
-            for issue in schema.integrity_errors[:10]:
-                scope = issue.affected_column or issue.affected_table
-                lines.append(
-                    f"| `{issue.severity.value}` | `{issue.error_type}` | `{scope}` | `{issue.affected_count}` |"
-                )
-        else:
-            lines.append("| `INFO` | none | schema | `0` |")
-        lines.append("")
-
-        if schema.relationships:
-            lines.extend([
-                "## Inferred Or Explicit Relationships",
-                "",
-                "| Status | Decision | Bucket | Relationship |",
-                "| --- | --- | --- | --- |",
-            ])
-            for rel in schema.relationships[:10]:
-                relationship = f"{rel.child_table}.{rel.child_column} -> {rel.parent_table}.{rel.parent_column}"
-                lines.append(
-                    f"| `{rel.status}` | `{rel.decision}` | `{rel.confidence_bucket}` | `{relationship}` |"
-                )
-            lines.append("")
-
-    lines.extend([
-        "## Guardrail Statement",
-        "",
-        "This report is generated only from deterministic JSON evidence. Numeric values and backticked fields are checked against the evidence set before the file is written.",
-        "",
-    ])
-    return "\n".join(lines)
-
-
-def _llm_prompt(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None,
-) -> str:
-    payload = _compact_payload(findings, verdict, schema)
-    return (
-        "Generate L4 narrative from this deterministic evidence only.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
-    )
-
-
-def generate_l4_report(
-    findings: DataQualityFindings | None,
-    verdict: DatasetVerdict,
-    schema: SchemaEvaluationFindings | None = None,
-) -> tuple[str, GuardrailReport]:
-    text, report, _result = generate_multi_agent_report(findings, verdict, schema)
-    return text, report
-
-
 # ============================================================
-# NEW: Structured JSON Multi-Agent Pipeline (Table-based)
+# LLM Prompts — Tiếng Việt
 # ============================================================
 
 _TABLE_ANALYST_SYSTEM_PROMPT = (
-    "You are a Senior Data Scientist performing EDA on a dataset. "
-    "Analyze the assigned table and return valid JSON only. "
-    "The JSON must have keys: table_name (string), table_overview (string), "
-    "column_issues (array of objects with keys: column_name, severity, problem, "
-    "ml_consequence, suggested_action, evidence_ref). "
-    "For problem: describe the issue with exact numbers from the evidence. "
-    "For ml_consequence: explain how this affects model families "
-    "(Linear/Logistic, Tree-based, Neural Networks, Clustering). "
-    "For suggested_action: use advisory tone — suggest, do not command. "
-    "For evidence_ref: use the finding_id from the evidence JSON if available, otherwise null. "
-    "Do not invent numbers, columns, or tables not in the evidence. "
-    "Do not use causal language such as causes, caused by, leads to, results in, or due to."
+    "Bạn là một Senior Data Scientist đang thực hiện EDA (Phân tích Dữ liệu Khám phá) trên một dataset. "
+    "Hãy phân tích bảng được giao và trả về JSON hợp lệ DUY NHẤT, không thêm bất kỳ text nào khác. "
+    "JSON phải có các khóa sau: "
+    "table_name (string — tên bảng), "
+    "table_overview (string — nhận xét tổng quan về bảng bằng tiếng Việt), "
+    "column_issues (mảng các object với các khóa: column_name, severity, problem, ml_consequence, suggested_action, evidence_ref). "
+    "Yêu cầu cụ thể: "
+    "- problem: mô tả vấn đề bằng tiếng Việt với con số chính xác từ evidence. "
+    "- ml_consequence: giải thích ảnh hưởng đến các nhóm thuật toán ML bằng tiếng Việt "
+    "(Linear/Logistic Regression, Tree-based, Neural Networks, Clustering). "
+    "- suggested_action: gợi ý tham khảo bằng tiếng Việt, dùng giọng đề xuất (không ra lệnh). "
+    "- evidence_ref: dùng finding_id từ JSON evidence nếu có, ngược lại để null. "
+    "- severity: chỉ dùng một trong ba giá trị: CRITICAL, HIGH, WARN. "
+    "NGHIÊM CẤM: bịa đặt con số, tên cột, tên bảng không có trong evidence. "
+    "NGHIÊM CẤM: dùng ngôn ngữ nhân quả như 'gây ra', 'dẫn đến', 'do', 'vì'."
 )
 
 _TABLE_ANALYST_USER_PROMPT_TEMPLATE = (
-    "Analyze this table and return structured JSON. "
-    "Include only columns with issues at WARN severity or above. "
-    "Use only the evidence provided below.\n\n"
+    "Hãy phân tích bảng sau và trả về JSON có cấu trúc. "
+    "Chỉ đưa vào column_issues những cột có vấn đề từ mức WARN trở lên. "
+    "Viết tất cả nhận xét bằng tiếng Việt. "
+    "Chỉ sử dụng thông tin trong evidence dưới đây:\n\n"
     "{json_slice}"
 )
 
 _EDITOR_STRUCTURED_SYSTEM_PROMPT = (
-    "You are a Senior Data Scientist writing an executive summary of a data quality report. "
-    "Return valid JSON only with these keys: "
-    "executive_summary (string — several sentences), "
-    "feature_usability (array of objects with keys: column, status, reason "
-    "where status is 'ready' or 'needs_work' or 'drop'), "
-    "fix_priority (array of strings — column names in priority order), "
-    "cross_table_evaluation (string or null), "
-    "verdict_explanation (string). "
-    "Do not invent numbers or columns not in the evidence. "
-    "Use advisory tone throughout."
+    "Bạn là một Senior Data Scientist viết báo cáo tóm tắt chất lượng dữ liệu. "
+    "Trả về JSON hợp lệ DUY NHẤT, không thêm bất kỳ text nào khác. "
+    "JSON phải có các khóa sau: "
+    "executive_summary (string bằng tiếng Việt, TỐI THIỂU 8 câu), "
+    "feature_usability (mảng object với các khóa: column, table_name, status, reason — "
+    "trong đó status chỉ là một trong ba giá trị: 'ready', 'needs_work', 'drop', "
+    "table_name là tên bảng chứa cột, reason viết bằng tiếng Việt), "
+    "fix_priority (mảng string — tên cột theo thứ tự ưu tiên xử lý), "
+    "cross_table_evaluation (string bằng tiếng Việt, TỐI THIỂU 4 câu — hoặc null nếu không có dữ liệu liên bảng), "
+    "verdict_explanation (string — giải thích verdict bằng tiếng Việt). "
+    "YÊU CẦU executive_summary: bao gồm "
+    "(1) Đánh giá tổng quan dataset (số bảng/cột/dòng, verdict được phân loại thế nào), "
+    "(2) Tổng hợp các vấn đề nghiêm trọng nhất (CRITICAL/HIGH) kèm số liệu cụ thể, "
+    "(3) Tỷ lệ thiếu dữ liệu và trùng lặp nếu đáng kể, "
+    "(4) Ảnh hưởng đến phân tích và ML nếu dùng dữ liệu này, "
+    "(5) Hướng xử lý được gợi ý (dùng giọng tư vấn, không ra lệnh). "
+    "NGHIÊM CẤM: bịa đặt con số hoặc tên cột không có trong evidence. "
+    "Dùng giọng tư vấn, tránh ngôn ngữ nhân quả."
 )
 
 
+# ============================================================
+# Deterministic Fallback (0 LLM call)
+# ============================================================
+
 def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTableResult:
-    """Deterministic fallback: tạo AnalystTableResult từ TableCluster không cần LLM."""
+    """Fallback deterministc: tạo AnalystTableResult từ TableCluster, không cần LLM."""
     column_issues: list[ColumnIssue] = []
-    # Gom issues theo cột
     col_issues_map: dict[str, list[dict]] = {}
     for issue in table_cluster.issues:
         col = issue.get("affected_column") or issue.get("affected_table") or "dataset"
         col_issues_map.setdefault(col, []).append(issue)
 
+    table_name_str = table_cluster.table_name
     for col_name, issues in col_issues_map.items():
         for issue in issues:
             severity = issue.get("compound_severity") or issue.get("severity", "WARN")
@@ -921,20 +337,20 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
                 column_name=col_name,
                 severity=severity,
                 problem=(
-                    f"{issue_type}: {issue.get('description', 'Issue detected')}. "
-                    f"Affected: {affected_count} rows{pct_str}."
+                    f"{issue_type}: {issue.get('description', 'Phát hiện vấn đề')}. "
+                    f"Ảnh hưởng: {affected_count} dòng{pct_str}."
                 ),
-                ml_consequence="Review this column before using in modeling.",
-                suggested_action="Inspect the affected rows and decide on remediation.",
+                ml_consequence="Cần kiểm tra cột này trước khi đưa vào mô hình.",
+                suggested_action="Xem xét các dòng bị ảnh hưởng và quyết định cách xử lý phù hợp.",
                 evidence_ref=issue.get("finding_id"),
             ))
 
     return AnalystTableResult(
         table_name=table_cluster.table_name,
         table_overview=(
-            f"Table '{table_cluster.table_name}' has {len(table_cluster.issues)} issues "
-            f"(max severity: {table_cluster.max_severity}) "
-            f"across {len(table_cluster.affected_columns)} columns."
+            f"Bảng '{table_cluster.table_name}' có {len(table_cluster.issues)} vấn đề "
+            f"(mức độ cao nhất: {table_cluster.max_severity}) "
+            f"trên {len(table_cluster.affected_columns)} cột."
         ),
         column_issues=column_issues,
         guardrail_passed=True,
@@ -942,11 +358,15 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
     )
 
 
+# ============================================================
+# Agent: Table Analyst
+# ============================================================
+
 async def _run_table_analyst(
     table_cluster: TableCluster,
     llm_errors: list[str] | None = None,
 ) -> tuple[AnalystTableResult, dict[str, Any]]:
-    """Analyst agent per TABLE — trả AnalystTableResult (structured JSON)."""
+    """Analyst agent per TABLE — trả AnalystTableResult (structured JSON tiếng Việt)."""
     fallback = _build_deterministic_table_result(table_cluster)
     llm_enabled = _llm_enabled()
 
@@ -967,7 +387,6 @@ async def _run_table_analyst(
                 )
                 candidate.guardrail_passed = True
                 candidate.retry_count = attempt - 1
-                # Basic validation: table_name should match
                 if candidate.table_name != table_cluster.table_name:
                     candidate.table_name = table_cluster.table_name
                 return candidate, {
@@ -995,6 +414,10 @@ async def _run_table_analyst(
     }
 
 
+# ============================================================
+# Agent: Structured Editor
+# ============================================================
+
 async def _run_structured_editor(
     verdict: DatasetVerdict,
     analyst_results: list[AnalystTableResult],
@@ -1004,9 +427,8 @@ async def _run_structured_editor(
     schema_gate: SchemaGateResult | None = None,
     llm_errors: list[str] | None = None,
 ) -> tuple[EditorStructuredOutput, dict[str, Any]]:
-    """Editor agent — nhận structured JSON từ Analyst, trả EditorStructuredOutput."""
-    # Build deterministic fallback
-    all_columns_ok: list[FeatureUsabilityItem] = []
+    """Editor agent — nhận JSON từ Analyst, trả EditorStructuredOutput tiếng Việt."""
+    # Deterministic fallback
     all_columns_issues: list[FeatureUsabilityItem] = []
     fix_priority: list[str] = []
 
@@ -1015,17 +437,49 @@ async def _run_structured_editor(
             status = "drop" if issue.severity == "CRITICAL" else "needs_work"
             all_columns_issues.append(FeatureUsabilityItem(
                 column=issue.column_name,
+                table_name=result.table_name,
                 status=status,
                 reason=f"[{issue.severity}] {issue.problem[:80]}",
             ))
             fix_priority.append(f"{result.table_name}.{issue.column_name}")
 
     meta = verdict.dataset_meta
+    summary = verdict.summary
+    # Build a more informative deterministic summary
+    critical_count = summary.critical
+    high_count = summary.high
+    warn_count = summary.warn
+    missing_pct = meta.p_cells_missing * 100
+    dup_pct = meta.p_duplicates * 100
+
+    severity_line = ""
+    if critical_count:
+        severity_line += f"{critical_count} vấn đề CRITICAL"
+    if high_count:
+        severity_line += (", " if severity_line else "") + f"{high_count} HIGH"
+    if warn_count:
+        severity_line += (", " if severity_line else "") + f"{warn_count} WARN"
+    if not severity_line:
+        severity_line = "không có vấn đề nghiêm trọng"
+
+    missing_note = (
+        f"Tỷ lệ thiếu dữ liệu {missing_pct:.1f}% — cần xem xét chiến lược imputation trước khi huấn luyện mô hình."
+        if missing_pct > 5 else
+        f"Tỷ lệ thiếu dữ liệu thấp ({missing_pct:.1f}%)."
+    )
+    dup_note = (
+        f"Tỷ lệ trùng lặp {dup_pct:.1f}% — nên dedup trước khi phân tích."
+        if dup_pct > 1 else ""
+    )
+
     fallback = EditorStructuredOutput(
         executive_summary=(
-            f"Dataset '{meta.file_name}' has {meta.n} rows and {meta.n_var} columns. "
-            f"Verdict: {verdict.verdict.value} with {verdict.summary.total_issues} total issues."
-        ),
+            f"Dataset '{meta.file_name}' có {meta.n:,} dòng × {meta.n_var} cột. "
+            f"Kết luận tổng thể: {verdict.verdict.value}. "
+            f"Phát hiện {severity_line} trên tổng {summary.total_issues} vấn đề. "
+            f"{missing_note} "
+            f"{dup_note}"
+        ).strip(),
         feature_usability=all_columns_issues,
         fix_priority=fix_priority,
         cross_table_evaluation=_cross_table_summary(cross_table_analysis),
@@ -1034,7 +488,7 @@ async def _run_structured_editor(
 
     llm_enabled = _llm_enabled()
     if llm_enabled:
-        payload = {
+        payload: dict[str, Any] = {
             "verdict": verdict.model_dump(mode="json"),
             "analyst_results": [r.model_dump(mode="json") for r in analyst_results],
             "cross_table_analysis": (
@@ -1042,7 +496,6 @@ async def _run_structured_editor(
                 if cross_table_analysis else None
             ),
         }
-        # Inject extra context
         if findings:
             payload["columns"] = {
                 name: stats.model_dump(exclude_none=True)
@@ -1056,11 +509,40 @@ async def _run_structured_editor(
                 for r in schema.relationships if r.cardinality
             ]
 
+        # Build per-table summary for richer context
+        table_summaries = []
+        for r in analyst_results:
+            t_issues = [f"{i.severity}: {i.column_name} — {i.problem[:60]}" for i in r.column_issues]
+            table_summaries.append({
+                "table": r.table_name,
+                "overview": r.table_overview,
+                "issue_count": len(r.column_issues),
+                "issues": t_issues[:6],
+            })
+
+        top_issues_summary = [
+            {
+                "issue_type": iss.issue_type,
+                "severity": iss.effective_severity.value,
+                "affected_column": iss.affected_column,
+                "affected_count": iss.affected_count,
+                "rationale": iss.rationale,
+            }
+            for iss in (verdict.top_issues or [])[:15]
+        ]
+
         prompt = (
-            "Write a structured JSON executive summary for this data quality report. "
-            "Include feature_usability for ALL columns mentioned in analyst_results. "
-            "Order fix_priority by severity (CRITICAL first).\n\n"
+            "Hãy viết báo cáo chất lượng dữ liệu đầy đủ dưới dạng JSON có cấu trúc. "
+            "executive_summary phải tối thiểu 8 câu, bao gồm: tổng quan dataset, các vấn đề nghiêm trọng "
+            "kèm số liệu cụ thể, ảnh hưởng phân tích, và hướng giải quyết được gợi ý. "
+            "feature_usability phải bao gồm tất cả các cột trong analyst_results, kèm table_name của từng cột. "
+            "cross_table_evaluation (nếu có dữ liệu relationship): nêu chi tiết mối quan hệ, cardinality, vấn đề khóa. "
+            "Viết tất cả nhận xét bằng tiếng Việt.\n\n"
             f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+            f"\n\n# Tóm tắt per-table (context bổ sung):\n"
+            f"{json.dumps(table_summaries, ensure_ascii=False, indent=2)}"
+            f"\n\n# Top issues (context bổ sung):\n"
+            f"{json.dumps(top_issues_summary, ensure_ascii=False, indent=2)}"
         )
         for attempt in range(1, 4):
             try:
@@ -1073,6 +555,16 @@ async def _run_structured_editor(
                 candidate = EditorStructuredOutput.model_validate_json(
                     _strip_json_fences(text)
                 )
+                # Backfill table_name on feature_usability items if LLM didn't include it
+                if candidate.feature_usability:
+                    # Build a lookup: column_name -> table_name from analyst_results
+                    col_to_table: dict[str, str] = {}
+                    for r in analyst_results:
+                        for ci in r.column_issues:
+                            col_to_table[ci.column_name] = r.table_name
+                    for item in candidate.feature_usability:
+                        if not getattr(item, "table_name", ""):
+                            item.table_name = col_to_table.get(item.column, "")
                 candidate.guardrail_passed = True
                 candidate.retry_count = attempt - 1
                 return candidate, {
@@ -1096,17 +588,82 @@ async def _run_structured_editor(
     }
 
 
-def render_table_result_html(result: AnalystTableResult) -> str:
+# ============================================================
+# Python Renderer: JSON → HTML
+# ============================================================
+
+def render_table_result_html(
+    result: AnalystTableResult,
+    chart_paths: dict[str, str] | None = None,
+    col_stats: dict | None = None,
+) -> str:
     """Python Renderer: chuyển AnalystTableResult JSON → HTML đẹp.
 
-    LLM chỉ cung cấp nội dung (problem, ml_consequence, suggested_action).
-    Hình thức (icon, heading, format) do code Python quyết định → 100% đồng nhất.
+    Nhúng chart bảng ngay sau overview, và chart cột ngay sau mỗi issue.
+    LLM chỉ cung cấp nội dung văn bản — hình thức do Python quyết định.
+
+    Args:
+        result: AnalystTableResult từ LLM/deterministic agent
+        chart_paths: dict {chart_key → path} cho bảng này (đã bỏ prefix bảng)
+        col_stats: dict {col_name → ColumnStats} thống kê inline cho bảng này
     """
+    chart_paths = chart_paths or {}
+    col_stats = col_stats or {}
+
+    # Chart keys thuộc cấp bảng (không phải cột)
+    _TABLE_LEVEL_CHARTS = {
+        "missingness_bar", "dtype_distribution", "numeric_boxplot",
+        "correlation_heatmap", "stacked_bar_issues",
+    }
+    # Chart keys thuộc cấp cột (prefix là tên cột)
+    _COLUMN_LEVEL_CHARTS = {"numeric_distributions", "categorical_top_values"}
+
+    def _chart_img(src: str, alt: str, caption: str = "") -> str:
+        cap = f'<figcaption class="chart-caption">{html.escape(caption)}</figcaption>' if caption else ""
+        return (
+            f'<figure class="inline-chart">'
+            f'<img src="{html.escape(src, quote=True)}" alt="{html.escape(alt)}" loading="lazy">'
+            f'{cap}</figure>'
+        )
+
+    def _col_stats_row(col_name: str) -> str:
+        stats = col_stats.get(col_name)
+        if not stats:
+            return ""
+        items = []
+        dtype = getattr(stats, "type", None)
+        if dtype:
+            items.append(f"<span class='cstat-pill'>Kiểu: {html.escape(str(dtype))}</span>")
+        p_miss = getattr(stats, "p_missing", None)
+        if p_miss is not None:
+            items.append(f"<span class='cstat-pill cstat-miss'>Thiếu: {p_miss*100:.1f}%</span>")
+        n_dist = getattr(stats, "n_distinct", None)
+        if n_dist is not None:
+            items.append(f"<span class='cstat-pill'>Distinct: {n_dist}</span>")
+        n_zeros = getattr(stats, "n_zeros", None)
+        if n_zeros is not None:
+            items.append(f"<span class='cstat-pill'>Zeros: {n_zeros}</span>")
+        if not items:
+            return ""
+        return f'<div class="col-stats-row">{" ".join(items)}</div>'
+
     parts: list[str] = []
-    table_icon = "📦"
-    parts.append(f'<div class="table-health-section">')
-    parts.append(f'<h3>{table_icon} Bảng: <code>{html.escape(result.table_name)}</code></h3>')
+    parts.append('<div class="table-health-section">')
+    parts.append(
+        f'<h3 class="table-section-title">'
+        f'📦 Bảng: <code>{html.escape(result.table_name)}</code></h3>'
+    )
     parts.append(f'<p class="table-overview">🌟 {html.escape(result.table_overview)}</p>')
+
+    # Nhúng chart cấp bảng ngay sau overview
+    table_chart_html = []
+    for ckey in _TABLE_LEVEL_CHARTS:
+        path = chart_paths.get(ckey)
+        if path:
+            label, desc = _CHART_LABEL.get(ckey, (ckey, ""))
+            table_chart_html.append(_chart_img(path, label, desc))
+    if table_chart_html:
+        parts.append('<div class="table-chart-row">' + "".join(table_chart_html) + '</div>')
 
     if not result.column_issues:
         parts.append('<p class="no-issues">✅ Không phát hiện vấn đề nào từ mức WARN trở lên.</p>')
@@ -1115,20 +672,40 @@ def render_table_result_html(result: AnalystTableResult) -> str:
             sev_class = issue.severity.lower()
             sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "WARN": "🟡"}.get(issue.severity, "⚪")
             parts.append(f'<div class="column-issue severity-{sev_class}">')
-            parts.append(f'<h4>🔸 Cột: <code>{html.escape(issue.column_name)}</code></h4>')
+            parts.append(
+                f'<h4 class="col-issue-title">🔸 Cột: '
+                f'<code>{html.escape(issue.column_name)}</code></h4>'
+            )
+            # Inline stats cho cột này
+            stats_row = _col_stats_row(issue.column_name)
+            if stats_row:
+                parts.append(stats_row)
             parts.append(
                 f'<p class="issue-problem">{sev_icon} '
                 f'<strong>[{html.escape(issue.severity)}]</strong> '
                 f'{html.escape(issue.problem)}</p>'
             )
             parts.append(
-                f'<p class="issue-ml"><strong>ML Consequence:</strong> '
+                f'<p class="issue-ml"><strong>Ảnh hưởng ML:</strong> '
                 f'{html.escape(issue.ml_consequence)}</p>'
             )
             parts.append(
                 f'<p class="issue-action"><strong>Gợi ý tham khảo:</strong> '
                 f'{html.escape(issue.suggested_action)}</p>'
             )
+            # Nhúng chart cấp cột nếu có
+            col_chart_found = False
+            for ckey in _COLUMN_LEVEL_CHARTS:
+                # Key dạng "column_name.chart_key" hoặc chart duy nhất cho cột đó
+                for possible_key in (
+                    f"{issue.column_name}.{ckey}",
+                    ckey if len(result.column_issues) == 1 else None,
+                ):
+                    if possible_key and possible_key in chart_paths:
+                        label, desc = _CHART_LABEL.get(ckey, (ckey, ""))
+                        parts.append(_chart_img(chart_paths[possible_key], label, desc))
+                        col_chart_found = True
+                        break
             if issue.evidence_ref:
                 parts.append(
                     f'<p class="evidence-ref"><small>Evidence: '
@@ -1140,59 +717,81 @@ def render_table_result_html(result: AnalystTableResult) -> str:
     return "\n".join(parts)
 
 
+# Mapping chart_key → (label ngắn, mô tả) dùng cho caption inline
+_CHART_LABEL: dict[str, tuple[str, str]] = {
+    "missingness_bar": ("Mức độ đầy đủ dữ liệu", "% giá trị thiếu theo từng cột"),
+    "dtype_distribution": ("Phân bổ kiểu dữ liệu", "Tỷ lệ các kiểu dữ liệu trong bảng"),
+    "numeric_distributions": ("Phân phối biến số", "Histogram các cột numeric"),
+    "numeric_boxplot": ("Box Plot", "Phân tán và ngoại lệ của biến số"),
+    "correlation_heatmap": ("Tương quan", "Mức độ tương quan từng cặp biến"),
+    "categorical_top_values": ("Giá trị phổ biến nhất", "Top values trong cột phân loại"),
+    "stacked_bar_issues": ("Phân bổ vấn đề", "Vấn đề theo bảng và mức độ nghiêm trọng"),
+}
+
+
 def render_editor_structured_html(editor: EditorStructuredOutput) -> str:
-    """Python Renderer: chuyển EditorStructuredOutput → HTML cho Phần 1."""
+    """Python Renderer: chuyển EditorStructuredOutput → HTML cho Executive Dashboard."""
     parts: list[str] = []
 
-    # Executive Summary
-    parts.append(f'<div class="executive-summary">')
+    # Tóm tắt điều hành
+    parts.append('<div class="executive-summary">')
     parts.append(f'<p>{html.escape(editor.executive_summary)}</p>')
     parts.append('</div>')
 
-    # Feature Usability Summary
+    # Bảng Khả Năng Sử Dụng Từng Cột
     if editor.feature_usability:
-        status_icons = {"ready": "✅", "needs_work": "⚠️", "drop": "❌"}
+        # Mức độ dựa trên severity thực tế, không gợi ý dùng hay loại bỏ
+        status_config = {
+            "ready":      ("✅", "Không vấn đề", "status-ready"),
+            "needs_work": ("⚠️", "Có vấn đề",   "status-needs-work"),
+            "drop":       ("🔴", "Nghiêm trọng", "status-critical"),
+        }
+        has_table_col = any(getattr(item, "table_name", "") for item in editor.feature_usability)
         parts.append('<div class="feature-usability">')
-        parts.append('<h3>Feature Usability Summary</h3>')
-        parts.append('<table><thead><tr>')
-        parts.append('<th>Trạng thái</th><th>Cột</th><th>Lý do</th>')
+        parts.append('<h3>Chất Lượng Từng Cột</h3>')
+        parts.append('<p class="feature-usability-note">Đánh giá dựa trên chất lượng dữ liệu quan sát được — không phụ thuộc vào mục đích sử dụng cụ thể.</p>')
+        parts.append('<table class="feature-usability-table"><thead><tr>')
+        if has_table_col:
+            parts.append('<th>Bảng</th>')
+        parts.append('<th>Cột</th><th>Mức độ</th><th>Nhận xét</th>')
         parts.append('</tr></thead><tbody>')
         for item in editor.feature_usability:
-            icon = status_icons.get(item.status, "❓")
+            icon, label, css_cls = status_config.get(item.status, ("❓", item.status, ""))
+            table_cell = ""
+            if has_table_col:
+                tname = getattr(item, "table_name", "") or "—"
+                table_cell = f'<td class="col-table-name"><code>{html.escape(tname)}</code></td>'
             parts.append(
-                f'<tr><td>{icon}</td>'
-                f'<td><code>{html.escape(item.column)}</code></td>'
-                f'<td>{html.escape(item.reason)}</td></tr>'
+                f'<tr class="{css_cls}">'
+                f'{table_cell}'
+                f'<td class="col-name-cell"><code>{html.escape(item.column)}</code></td>'
+                f'<td class="status-cell"><span class="status-badge {css_cls}">{icon} {label}</span></td>'
+                f'<td class="reason-cell">{html.escape(item.reason)}</td></tr>'
             )
         parts.append('</tbody></table>')
         parts.append('</div>')
 
-    # Fix Priority
-    if editor.fix_priority:
-        parts.append('<div class="fix-priority">')
-        parts.append('<h3>Fix Priority</h3>')
-        parts.append('<ol>')
-        for col in editor.fix_priority:
-            parts.append(f'<li><code>{html.escape(col)}</code></li>')
-        parts.append('</ol>')
-        parts.append('</div>')
-
-    # Verdict Explanation
+    # Giải thích verdict — đặt sau để người đọc đã có context
     if editor.verdict_explanation:
-        parts.append(f'<div class="verdict-explanation">')
-        parts.append(f'<h3>Decision Rationale</h3>')
+        parts.append('<div class="verdict-explanation">')
+        parts.append('<h3>Cơ Sở Đánh Giá</h3>')
         parts.append(f'<p>{html.escape(editor.verdict_explanation)}</p>')
         parts.append('</div>')
 
-    # Cross-table Evaluation
+    # Cross-table Evaluation — nếu có, hiển thị ở đây như text tóm tắt
+    # (Chart network và visual sẽ được hiển thị riêng ở section Cross-table)
     if editor.cross_table_evaluation:
-        parts.append(f'<div class="cross-table-eval">')
-        parts.append(f'<h3>Cross-Table Evaluation</h3>')
+        parts.append('<div class="cross-table-eval-summary">')
+        parts.append('<h3>Đánh Giá Mối Quan Hệ Liên Bảng</h3>')
         parts.append(f'<p>{html.escape(editor.cross_table_evaluation)}</p>')
         parts.append('</div>')
 
     return "\n".join(parts)
 
+
+# ============================================================
+# Orchestrator
+# ============================================================
 
 async def run_structured_multi_agent_l4(
     findings: DataQualityFindings | None,
@@ -1201,8 +800,8 @@ async def run_structured_multi_agent_l4(
     cross_table_analysis: CrossTableAnalysis | None = None,
     schema_gate: SchemaGateResult | None = None,
 ) -> tuple[str, MultiAgentResult]:
-    """Luồng multi-agent MỚI: gom theo Table, output JSON, Python render HTML."""
-    # Step 1: Dispatch theo table
+    """Orchestrator chính: gom theo Table → Analyst JSON → Editor JSON → Python render HTML."""
+    # Bước 1: Dispatch theo table
     dispatch_result = dispatch_by_table(
         findings.anomalies if findings else [],
         schema.integrity_errors if schema else [],
@@ -1211,7 +810,7 @@ async def run_structured_multi_agent_l4(
 
     llm_errors: list[str] = []
 
-    # Step 2: Fan-out Analyst per table (song song)
+    # Bước 2: Fan-out Analyst per table (chạy song song)
     analyst_tasks = [
         _run_table_analyst(tc, llm_errors)
         for tc in dispatch_result.table_clusters
@@ -1220,7 +819,7 @@ async def run_structured_multi_agent_l4(
     analyst_table_results = [result for result, _detail in analyst_results_raw]
     agent_details = [detail for _result, detail in analyst_results_raw]
 
-    # Step 3: Editor tổng hợp
+    # Bước 3: Editor tổng hợp
     editor_structured, editor_detail = await _run_structured_editor(
         verdict,
         analyst_table_results,
@@ -1232,22 +831,21 @@ async def run_structured_multi_agent_l4(
     )
     agent_details.append(editor_detail)
 
-    # Step 4: Python render JSON → HTML
+    # Bước 4: Python render JSON → HTML
     html_parts: list[str] = []
 
     # Phần 1: Executive Dashboard
     html_parts.append(render_editor_structured_html(editor_structured))
 
-    # Phần 2: Table-by-Table Health Check
+    # Phần 2: Kiểm tra sức khỏe từng bảng
     html_parts.append('<div class="table-health-checks">')
-    html_parts.append('<h2>Table-by-Table Health Check</h2>')
+    html_parts.append('<h2>Kiểm Tra Sức Khỏe Từng Bảng</h2>')
     for result in analyst_table_results:
         html_parts.append(render_table_result_html(result))
     html_parts.append('</div>')
 
     rendered_html = "\n".join(html_parts)
 
-    # Build MultiAgentResult
     used_fallback = any(
         detail.get("used_fallback", False) for detail in agent_details
     )
@@ -1269,7 +867,7 @@ def generate_structured_report(
     cross_table_analysis: CrossTableAnalysis | None = None,
     schema_gate: SchemaGateResult | None = None,
 ) -> tuple[str, MultiAgentResult]:
-    """Sync wrapper cho luồng structured mới."""
+    """Sync wrapper cho orchestrator chính."""
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -1278,16 +876,56 @@ def generate_structured_report(
                 findings, verdict, schema, cross_table_analysis, schema_gate
             )
         )
-    # Fallback nếu đang trong event loop
+    # Fallback nếu đang trong event loop (ví dụ: test async)
     html_parts = []
     if findings:
-        dispatch_result = dispatch_by_table(
-            findings.anomalies, 
+        dr = dispatch_by_table(
+            findings.anomalies,
             schema.integrity_errors if schema else [],
             columns=findings.columns,
         )
-        for tc in dispatch_result.table_clusters:
-            fallback = _build_deterministic_table_result(tc)
-            html_parts.append(render_table_result_html(fallback))
+        for tc in dr.table_clusters:
+            fb = _build_deterministic_table_result(tc)
+            html_parts.append(render_table_result_html(fb))
 
     return "\n".join(html_parts), MultiAgentResult(used_fallback=True)
+
+
+# ============================================================
+# Backward-compatible wrappers
+# ============================================================
+
+def generate_multi_agent_report(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+    cross_table_analysis: CrossTableAnalysis | None = None,
+    schema_gate: SchemaGateResult | None = None,
+) -> tuple[str, GuardrailReport, MultiAgentResult]:
+    """Backward-compat wrapper — gọi luồng structured mới.
+
+    Trả (html_text, guardrail_report, multi_result) để giữ interface cũ.
+    """
+    html_text, multi_result = generate_structured_report(
+        findings, verdict, schema, cross_table_analysis, schema_gate
+    )
+    # Build a minimal GuardrailReport from multi_result metadata
+    guardrail = validate_narrative(
+        html_text, findings, verdict, schema, cross_table_analysis,
+        provider="structured-pipeline",
+        used_fallback=multi_result.used_fallback,
+    )
+    return html_text, guardrail, multi_result
+
+
+def generate_l4_report(
+    findings: DataQualityFindings | None,
+    verdict: DatasetVerdict,
+    schema: SchemaEvaluationFindings | None = None,
+) -> tuple[str, GuardrailReport]:
+    """Backward-compat wrapper — gọi luồng structured mới.
+
+    Trả (html_text, guardrail_report) để giữ interface cũ.
+    """
+    text, report, _result = generate_multi_agent_report(findings, verdict, schema)
+    return text, report

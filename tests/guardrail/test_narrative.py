@@ -180,6 +180,8 @@ def test_generated_l4_report_passes_guardrail(monkeypatch):
 
     text, report = generate_l4_report(_findings(), _verdict())
 
-    assert "L4 Guarded EDA Report" in text
+    # Structured pipeline trả HTML với executive-summary div thay vì Markdown heading cũ
+    assert "executive-summary" in text
+    assert "data.csv" in text
     assert report.status == "passed"
-    assert report.checked_numbers
+

@@ -316,8 +316,10 @@ class AnalystOutput(BaseModel):
 class FeatureUsabilityItem(BaseModel):
     """1 dòng trong bảng Feature Usability Summary."""
     column: str
+    table_name: str = ""                       # bảng chứa cột này
     status: str                                # "ready" | "needs_work" | "drop"
     reason: str
+
 
 
 class EditorStructuredOutput(BaseModel):
