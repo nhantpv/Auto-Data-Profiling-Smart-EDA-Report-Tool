@@ -1410,7 +1410,10 @@ def _overview_tab_panel(
     # 1. Science brief (verdict headline + score counts)
     sections.append(_science_brief(verdict))
 
-    # 2. Missingness Diagnostic table — hiển thị toàn bộ cột có missing (kể cả dưới threshold)
+    # 2. Profile Diagnostics (shape/KPI) — hiện sớm để reader có context ngay
+    sections.append(f'<div class="stats-workbench">{_statistical_overview(verdict)}</div>')
+
+    # 3. Missingness Diagnostic table — hiển thị toàn bộ cột có missing (kể cả dưới threshold)
     miss_table = _missingness_diagnostic_table(findings)
     if miss_table:
         sections.append(miss_table)
@@ -1418,12 +1421,53 @@ def _overview_tab_panel(
     # 3. Issue spotlight — dạng bảng (Bảng|Đột|Loại|Mức độ|Dòng bị ảnh hưởng)
     sections.append(_issue_spotlight(verdict))
 
-    # 3. Executive summary + Feature usability từ Editor
+    # 4. Executive summary + Feature usability từ Editor
     if result.editor_structured is not None:
         from reporting.l4_report import render_editor_structured_html
         details = _agent_detail_lookup(result)
         agent_meta_str = _agent_meta(details.get("structured_editor"), "guardrail passed")
         rendered = render_editor_structured_html(result.editor_structured)
+
+        # ── Fallback banner (Issue 2B) ─────────────────────────────────────
+        # Detect which case: no API key vs LLM failed guardrail
+        editor_detail = details.get("structured_editor")
+        used_fb = result.used_fallback or bool(
+            editor_detail and editor_detail.get("used_fallback")
+        )
+        retry_count = (editor_detail or {}).get("retry_count", 0)
+        llm_was_attempted = bool(retry_count and retry_count > 0)
+
+        fallback_banner = ""
+        if used_fb:
+            if llm_was_attempted:
+                # Guardrail failure after N retries
+                fallback_banner = (
+                    '<div class="fallback-banner fallback-banner-retry">'
+                    '<span class="fallback-icon">⚠️</span>'
+                    '<div>'
+                    '<strong>Phân tích LLM không vượt qua guardrail</strong> '
+                    f'(sau {retry_count} lần thử). '
+                    'Nội dung bên dưới là phân tích <strong>rule-based tự động</strong>, '
+                    'không phải nhận định của AI — độ sâu và tính cá nhân hoá bị giới hạn. '
+                    'Kiểm tra log để biết lý do guardrail reject.'
+                    '</div>'
+                    '</div>'
+                )
+            else:
+                # No API key configured
+                fallback_banner = (
+                    '<div class="fallback-banner fallback-banner-nokey">'
+                    '<span class="fallback-icon">⚠️</span>'
+                    '<div>'
+                    '<strong>Phân tích AI không khả dụng</strong> — '
+                    'API key chưa được cấu hình (<code>SMART_EDA_L4_PROVIDER=openai</code> '
+                    'và <code>OPENAI_API_KEY</code> chưa set trong <code>.env</code>). '
+                    'Nội dung bên dưới là phân tích <strong>rule-based tự động</strong> '
+                    'dựa trên các ngưỡng cố định — không có insight từ LLM.'
+                    '</div>'
+                    '</div>'
+                )
+
         sections.append(
             '<section class="ai-section editor-section">'
             '<div class="section-heading">'
@@ -1431,9 +1475,11 @@ def _overview_tab_panel(
             '<h2>Đánh Giá Tổng Thể Chất Lượng Dữ Liệu</h2>'
             '</div>'
             f'<div class="agent-meta">AI Editor · {html.escape(agent_meta_str)}</div>'
+            f'{fallback_banner}'
             f'{rendered}'
             '</section>'
         )
+
 
     # 4. Cross-table: network chart + text evaluation + correlation tables
     cross_eval = getattr(getattr(result, "editor_structured", None), "cross_table_evaluation", None)
@@ -1502,9 +1548,6 @@ def _overview_tab_panel(
         cross_parts.append(cross_corr_html)
     cross_parts.append('</section>')
     sections.append("\n".join(cross_parts))
-
-    # 5. Statistical overview (shape, kpi) — giữ lại vì nó tổng hợp toàn dataset
-    sections.append(f'<div class="stats-workbench">{_statistical_overview(verdict)}</div>')
 
     # 6. Appendix
     if result.appendix_html:
@@ -1666,6 +1709,18 @@ def _build_user_guide_html() -> str:
           <td>✅ An toàn khi dùng mean/median hoặc mode. Listwise deletion ít ảnh hưởng bias</td>
         </tr>
         <tr>
+          <td><span class="cstat-pill cstat-mnar" style="background:#7c3aed;color:#fff;">MNAR ⛔</span></td>
+          <td><strong>Missing Not At Random</strong> — giá trị thiếu liên quan đến <em>chính giá trị đó</em> (ví dụ: lương cao thường bỏ trống)</td>
+          <td>Không thể phát hiện chắc chắn từ data — cần domain knowledge. Thường xuất hiện ở dữ liệu self-reported</td>
+          <td>⛔ Không được impute naively — sẽ tạo bias hệ thống. Cần collect thêm dữ liệu hoặc mô hình hoá MNAR explicitly</td>
+        </tr>
+        <tr>
+          <td><span class="cstat-pill cstat-structural" style="background:#0369a1;color:#fff;">STRUCTURAL 🏗️</span></td>
+          <td><strong>Structural Absent</strong> — cột được thiết kế để trống theo business logic (ví dụ: cột <code>fax</code> trong bảng <code>customer</code>)</td>
+          <td>Tỷ lệ null rất cao (thường &gt;90%) nhưng không phải lỗi — đây là đặc tính thiết kế</td>
+          <td>✅ Không cần impute. Có thể drop hoặc giữ làm binary indicator (0/1 có fax hay không)</td>
+        </tr>
+        <tr>
           <td><span class="cstat-pill cstat-indet">INDET. ?</span></td>
           <td><strong>Indeterminate</strong> — quá ít giá trị thiếu để xác định</td>
           <td>Số lượng missing &lt; ngưỡng tối thiểu để train classifier đáng tin</td>
@@ -1675,6 +1730,7 @@ def _build_user_guide_html() -> str:
     </table>
     </div>
   </section>
+
 
   <!-- Loại lỗi phổ biến -->
   <section class="ai-section" style="margin-bottom:28px;">
@@ -1687,6 +1743,31 @@ def _build_user_guide_html() -> str:
         <th>Loại vấn đề</th><th>Cách phát hiện</th><th>Ảnh hưởng phân tích</th>
       </tr></thead>
       <tbody>
+        <tr>
+          <td><code>PK_DUPLICATE</code></td>
+          <td>Đếm giá trị trùng trên cột được khai báo là Primary Key</td>
+          <td>JOIN nhân rows, aggregation sai, entity identity bị phá vỡ</td>
+        </tr>
+        <tr>
+          <td><code>COMPOSITE_PK_DUPLICATE</code></td>
+          <td>Kiểm tra uniqueness của tổ hợp (col1, col2) trong junction table</td>
+          <td>Vi phạm uniqueness constraint, JOIN cho kết quả sai</td>
+        </tr>
+        <tr>
+          <td><code>PK_NULL</code></td>
+          <td>Kiểm tra NULL trên cột Primary Key</td>
+          <td>Không thể identify entity, JOIN bị mất dữ liệu</td>
+        </tr>
+        <tr>
+          <td><code>ORPHAN_FOREIGN_KEY</code></td>
+          <td>Left join bảng con sang bảng cha, đếm rows không match</td>
+          <td>JOIN trả về NULL hoặc mất dữ liệu, aggregation thiếu</td>
+        </tr>
+        <tr>
+          <td><code>NON_UNIQUE_PARENT_PK</code></td>
+          <td>Kiểm tra uniqueness của PK trong bảng cha được tham chiếu</td>
+          <td>JOIN nhân rows phía child, tạo Cartesian product ngầm</td>
+        </tr>
         <tr>
           <td><code>HIGH_MISSING_RATE</code></td>
           <td>% giá trị null vượt ngưỡng (mặc định 30%)</td>
@@ -1701,6 +1782,11 @@ def _build_user_guide_html() -> str:
           <td><code>LOW_VARIANCE / CONSTANT</code></td>
           <td>Std ≈ 0 hoặc chỉ có 1 giá trị duy nhất</td>
           <td>Feature vô dụng trong ML, cần loại bỏ</td>
+        </tr>
+        <tr>
+          <td><code>CONSTANT_COLUMN</code></td>
+          <td>Tất cả giá trị trong cột giống hệt nhau (variance = 0)</td>
+          <td>Zero information content, luôn nên loại khỏi feature set</td>
         </tr>
         <tr>
           <td><code>OUTLIER_RATE_HIGH</code></td>
@@ -1723,6 +1809,16 @@ def _build_user_guide_html() -> str:
           <td>Silent error trong pipeline downstream, parse fail ở production</td>
         </tr>
         <tr>
+          <td><code>NOT_NULL_VIOLATION</code></td>
+          <td>Cột được khai báo NOT NULL nhưng có giá trị null trong thực tế</td>
+          <td>Vi phạm contract dữ liệu, downstream sẽ fail nếu enforce NOT NULL</td>
+        </tr>
+        <tr>
+          <td><code>UNIQUE_VIOLATION</code></td>
+          <td>Cột được khai báo UNIQUE nhưng có giá trị trùng lặp</td>
+          <td>Vi phạm constraint, có thể là dấu hiệu của lỗi ETL hoặc merge sai</td>
+        </tr>
+        <tr>
           <td><code>FK_INTEGRITY_VIOLATION</code></td>
           <td>Foreign key không match giữa bảng con và bảng cha</td>
           <td>JOIN trả về NULL rows, aggregation sai, report thiếu dữ liệu</td>
@@ -1732,12 +1828,18 @@ def _build_user_guide_html() -> str:
           <td>Regex/format check (email, phone, date) — tỉ lệ fail cao</td>
           <td>Dữ liệu thô cần normalize/validate trước downstream</td>
         </tr>
+        <tr>
+          <td><code>INCONSISTENT_FORMAT</code></td>
+          <td>Phát hiện hỗn hợp format trong cùng một cột (date format, encoding)</td>
+          <td>Parse error, silent data loss khi xử lý hàng loạt</td>
+        </tr>
       </tbody>
     </table>
     </div>
   </section>
 
   <!-- Cách đọc report -->
+
   <section class="ai-section">
     <div class="section-heading">
       <h3 style="margin:0 0 12px;">🗂️ Cách Điều Hướng Report</h3>

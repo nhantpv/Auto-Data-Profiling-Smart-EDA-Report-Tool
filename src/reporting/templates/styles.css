@@ -2688,3 +2688,41 @@ tr:last-child td {
   padding: 0;
   white-space: pre;
 }
+
+/* ── Fallback Banner (Issue 2B) ──────────────────────────────────────────── */
+.fallback-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border-left: 4px solid var(--warn);
+  background: var(--warn-soft);
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #78350f;
+}
+.fallback-banner .fallback-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.fallback-banner strong {
+  color: #92400e;
+}
+.fallback-banner code {
+  background: rgba(180, 83, 9, 0.12);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 12px;
+  color: #78350f;
+}
+.fallback-banner-retry {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+.fallback-banner-nokey {
+  border-left-color: #f59e0b;
+  background: #fff7ed;
+}

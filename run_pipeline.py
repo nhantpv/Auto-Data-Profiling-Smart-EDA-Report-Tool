@@ -853,7 +853,7 @@ def run_multi(
     if stacked_bar_file:
         extra_charts["stacked_bar_issues"] = stacked_bar_file
     if corr_chart_file:
-        extra_charts["top_correlations"] = corr_chart_file
+        extra_charts["top_correlations_bar"] = corr_chart_file
     if extra_charts:
         updated_meta = verdict.dataset_meta.model_copy(
             update={"overview_charts": {**verdict.dataset_meta.overview_charts, **extra_charts}}

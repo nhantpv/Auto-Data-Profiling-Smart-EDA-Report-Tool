@@ -8,6 +8,7 @@ QĐ-6a: "MNAR?" retired.  Only MAR escalates missingness severity.
 """
 import json
 from pathlib import Path
+import pandas as pd
 from config.threshold_registry import ThresholdRegistry
 from ontology.models import AnomalyRecord, ColumnStats, Provenance, Severity, SEVERITY_ORDER
 from ontology.finding_registry import FindingRegistry
@@ -250,11 +251,11 @@ def _detect_format_inconsistency(
                     dq_dimensions=["Consistency"],
                     provenance=Provenance.OBSERVED,
                     threshold_ref="format_consistency",
-                    affected_count=int(affected_count),
+                    affected_count=affected_count,
                     affected_percent=affected_count / n if n > 0 else 0,
                     affected_column=col_name,
-                    top_10_samples=[
-                        str(v) for group in list(inconsistent_groups.values())[:3]
+                    top_10_samples=[  # type: ignore
+                        v for group in list(inconsistent_groups.values())[:3]
                         for v in sorted(group)
                     ][:10],
                 ))

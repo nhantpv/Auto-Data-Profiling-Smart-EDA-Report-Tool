@@ -31,6 +31,8 @@ class JobRuntime:
         self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="smart-eda-job")
         self._futures: dict[str, Future] = {}
         self._lock = Lock()
+        self._file_locks: dict[str, Lock] = {}   # per-job file-access lock
+        self._file_locks_lock = Lock()            # guard _file_locks dict itself
 
     def submit(
         self,
@@ -60,11 +62,33 @@ class JobRuntime:
             self._futures[job_id] = future
         return self.get(job_id)
 
+    def _file_lock(self, job_id: str) -> Lock:
+        """Return (or create) the per-job file access lock."""
+        with self._file_locks_lock:
+            if job_id not in self._file_locks:
+                self._file_locks[job_id] = Lock()
+            return self._file_locks[job_id]
+
     def get(self, job_id: str) -> dict[str, Any]:
+        import time
         path = self._meta_path(job_id)
         if not path.exists():
             raise FileNotFoundError(job_id)
-        return json.loads(path.read_text(encoding="utf-8"))
+        # Retry loop: on Windows, PermissionError can appear briefly
+        # while another thread is doing the atomic tmp→job.json rename.
+        last_err: Exception | None = None
+        for attempt in range(6):
+            try:
+                with self._file_lock(job_id):
+                    return json.loads(path.read_text(encoding="utf-8"))
+            except PermissionError as exc:
+                last_err = exc
+                time.sleep(0.05 * (attempt + 1))  # 50ms, 100ms, 150ms …
+            except json.JSONDecodeError as exc:
+                # File partially written — wait for next flush
+                last_err = exc
+                time.sleep(0.05)
+        raise PermissionError(f"Cannot read job.json for {job_id} after retries") from last_err
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         meta = self.get(job_id)
@@ -198,9 +222,20 @@ class JobRuntime:
         return self.jobs_dir / job_id / "job.json"
 
     def _write_meta(self, job_id: str, meta: dict[str, Any]) -> None:
+        import time
         job_dir = self.jobs_dir / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         path = job_dir / "job.json"
         tmp = job_dir / "job.json.tmp"
-        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        content = json.dumps(meta, ensure_ascii=False, indent=2)
+        with self._file_lock(job_id):
+            for attempt in range(5):
+                try:
+                    tmp.write_text(content, encoding="utf-8")
+                    tmp.replace(path)
+                    return
+                except PermissionError:
+                    if attempt < 4:
+                        time.sleep(0.05 * (attempt + 1))
+                    else:
+                        raise  # Let caller handle after 5 attempts

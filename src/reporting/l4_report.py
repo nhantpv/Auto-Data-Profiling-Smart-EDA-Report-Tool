@@ -275,7 +275,15 @@ _TABLE_ANALYST_SYSTEM_PROMPT = (
     "- problem: mô tả vấn đề bằng tiếng Việt với con số chính xác từ evidence. "
     "- ml_consequence: giải thích ảnh hưởng đến các nhóm thuật toán ML bằng tiếng Việt "
     "(Linear/Logistic Regression, Tree-based, Neural Networks, Clustering). "
-    "- suggested_action: gợi ý tham khảo bằng tiếng Việt, dùng giọng đề xuất (không ra lệnh). "
+    "- suggested_action: viết dưới góc độ Data Scientist tư vấn trực tiếp. Phải bao gồm: "
+    "(1) kỹ thuật xử lý cụ thể phù hợp với loại vấn đề (ví dụ: mean/median/KNN/MICE imputation, "
+    "log-transform, IQR clipping, deduplication theo key, target encoding, cast kiểu dữ liệu); "
+    "(2) điều kiện hoặc trade-off cần lưu ý trước khi áp dụng; "
+    "(3) thứ tự ưu tiên nếu có nhiều lựa chọn. Dùng giọng đề xuất, không ra lệnh. "
+    "Tham chiếu issue_type trong evidence để chọn hướng xử lý phù hợp: "
+    "MISSINGNESS→imputation strategy; PK_DUPLICATE→dedup; ORPHAN_FOREIGN_KEY→kiểm tra join; "
+    "OUTLIER_RATE_HIGH→clip/transform; SKEWNESS_HIGH→log/box-cox; DUPLICATE_ROWS→dedup; "
+    "HIGH_CARDINALITY→encoding strategy; TYPE_MISMATCH→cast với error handling; CONSTANT_COLUMN→loại khỏi feature set. "
     "- evidence_ref: dùng finding_id từ JSON evidence nếu có, ngược lại để null. "
     "- severity: chỉ dùng một trong ba giá trị: CRITICAL, HIGH, WARN. "
     "NGHIÊM CẤM: bịa đặt con số, tên cột, tên bảng không có trong evidence. "
@@ -291,22 +299,29 @@ _TABLE_ANALYST_USER_PROMPT_TEMPLATE = (
 )
 
 _EDITOR_STRUCTURED_SYSTEM_PROMPT = (
-    "Bạn là một Senior Data Scientist viết báo cáo tóm tắt chất lượng dữ liệu. "
+    "Bạn là một Senior Data Scientist đang tư vấn trực tiếp cho engineering team về chất lượng dữ liệu. "
     "Trả về JSON hợp lệ DUY NHẤT, không thêm bất kỳ text nào khác. "
     "JSON phải có các khóa sau: "
-    "executive_summary (string bằng tiếng Việt, TỐI THIỂU 8 câu), "
+    "executive_summary (string bằng tiếng Việt, TỐI THIỂU 12 câu), "
     "feature_usability (mảng object với các khóa: column, table_name, status, reason — "
     "trong đó status chỉ là một trong ba giá trị: 'ready', 'needs_work', 'drop', "
     "table_name là tên bảng chứa cột, reason viết bằng tiếng Việt), "
     "fix_priority (mảng string — tên cột theo thứ tự ưu tiên xử lý), "
     "cross_table_evaluation (string bằng tiếng Việt, TỐI THIỂU 4 câu — hoặc null nếu không có dữ liệu liên bảng), "
     "verdict_explanation (string — giải thích verdict bằng tiếng Việt). "
-    "YÊU CẦU executive_summary: bao gồm "
-    "(1) Đánh giá tổng quan dataset (số bảng/cột/dòng, verdict được phân loại thế nào), "
-    "(2) Tổng hợp các vấn đề nghiêm trọng nhất (CRITICAL/HIGH) kèm số liệu cụ thể, "
-    "(3) Tỷ lệ thiếu dữ liệu và trùng lặp nếu đáng kể, "
-    "(4) Ảnh hưởng đến phân tích và ML nếu dùng dữ liệu này, "
-    "(5) Hướng xử lý được gợi ý (dùng giọng tư vấn, không ra lệnh). "
+    "YÊU CẦU executive_summary phải có ĐẦY ĐỦ CÁC PHẦN SAU: "
+    "(1) Tổng quan dataset: số bảng, tổng số cột, tổng số dòng, verdict và lý do cụ thể với con số. "
+    "(2) Các vấn đề nghiêm trọng nhất (CRITICAL/HIGH) — đề cập ĐÍch danh tên bảng và tên cột bị ảnh hưởng, "
+    "kèm số dòng/tỷ lệ cụ thể từ top_issues. "
+    "(3) Tỷ lệ thiếu dữ liệu và trùng lặp nếu > 1%. "
+    "(4) Hệ quả cụ thể nếu dùng dataset này cho ML: ít nhất 2 hệ quả kỹ thuật "
+    "(ví dụ: Linear Regression bị bias do missing MAR, FK violation khiến JOIN trả thiếu rows, "
+    "duplicate làm overfit trong train set...). "
+    "(5) Phần cuối BẮT BUỘC là 'Khuyến nghị ưu tiên:' — liệt kê 3-5 hành động cụ thể theo thứ tự tác động "
+    "(cao → thấp), viết dưới góc độ chuyên gia đang tư vấn trực tiếp, KHÔNG mô tả lại vấn đề. "
+    "Dùng giọng: 'Chúng tôi khuyến nghị...', 'Ưu tiên xử lý...', 'Có thể bỏ qua... nếu...'. "
+    "Mỗi khuyến nghị phải chỉ rõ kỹ thuật cụ thể (ví dụ: MICE imputation, dedup theo surrogate key, "
+    "cast kiểu với pd.to_numeric(errors='coerce'), log1p transform trước khi train). "
     "NGHIÊM CẤM: bịa đặt con số hoặc tên cột không có trong evidence. "
     "Dùng giọng tư vấn, tránh ngôn ngữ nhân quả."
 )
@@ -316,6 +331,117 @@ _EDITOR_STRUCTURED_SYSTEM_PROMPT = (
 # Deterministic Fallback (0 LLM call)
 # ============================================================
 
+# Per-issue-type action suggestions for deterministic fallback (Issue 6)
+_DETERMINISTIC_SUGGESTIONS: dict[str, str] = {
+    "PK_DUPLICATE": (
+        "Thực hiện deduplication: giữ bản ghi mới nhất (theo timestamp) hoặc bản ghi có nhiều dữ liệu nhất. "
+        "Kiểm tra upstream ETL pipeline để ngăn tái phát. Cân nhắc thêm UNIQUE constraint ở database layer. "
+        "Ưu tiên fix trước vì PK duplicate phá vỡ tính toàn vẹn của mọi phép JOIN."
+    ),
+    "COMPOSITE_PK_DUPLICATE": (
+        "Tìm các tuple (key1, key2) bị trùng và quyết định giữ bản ghi nào (mới nhất hoặc merge). "
+        "Kiểm tra xem có đúng là composite PK hay cần thêm cột thứ ba vào key. "
+        "Thêm UNIQUE(col1, col2) constraint sau khi đã dedup."
+    ),
+    "PK_NULL": (
+        "Điều tra tại sao PK có NULL — có thể do lỗi ETL hoặc optional entity. "
+        "Nếu cần giữ: gán surrogate key (UUID hoặc sequence) cho các row bị NULL. "
+        "Nếu không cần: xóa các row không có identity. Đây là blocker cho mọi JOIN."
+    ),
+    "ORPHAN_FOREIGN_KEY": (
+        "Không JOIN trực tiếp khi còn FK violation. Trước tiên: LEFT JOIN để đếm orphan rows. "
+        "Quyết định hướng xử lý: (1) SET NULL nếu FK là optional, "
+        "(2) xóa orphan rows nếu business logic cho phép, "
+        "(3) fix upstream để đảm bảo parent records tồn tại trước khi insert child. "
+        "Ưu tiên cao vì sẽ gây mất dữ liệu âm thầm trong aggregation."
+    ),
+    "NON_UNIQUE_PARENT_PK": (
+        "Bảng cha có PK không unique sẽ nhân rows khi JOIN — cần dedup bảng cha trước. "
+        "Dùng ROW_NUMBER() OVER (PARTITION BY pk ORDER BY ...) để chọn bản ghi đại diện. "
+        "Sau dedup, thêm UNIQUE constraint để prevent tái phát."
+    ),
+    "MISSINGNESS": (
+        "Xem cơ chế thiếu (MAR/MCAR/MNAR) trong bảng Missingness Diagnostic. "
+        "Nếu MAR: dùng KNN imputation hoặc MICE thay vì mean/median blind — pattern thiếu có thể dự đoán. "
+        "Nếu MCAR: mean/median/mode an toàn, listwise deletion ít gây bias. "
+        "Nếu > 60% missing: cân nhắc drop cột hoặc thu thập lại dữ liệu nguồn."
+    ),
+    "HIGH_MISSING_RATE": (
+        "Nếu > 60%: cân nhắc drop cột. "
+        "Nếu 30-60% với MAR pattern: dùng MICE hoặc model-based imputation (IterativeImputer trong sklearn). "
+        "Nếu 5-30%: KNN imputation thường đủ tốt. "
+        "Không dùng mean/median khi có pattern thiếu (MAR)."
+    ),
+    "DUPLICATE_ROWS": (
+        "Dùng df.drop_duplicates(subset=[key_cols]) nếu chỉ muốn dedup theo key columns. "
+        "Nếu dedup toàn row: df.drop_duplicates(keep='last'). "
+        "Audit upstream ETL để tìm nguyên nhân gốc. "
+        "Tách train/test TRƯỚC khi dedup để tránh data leakage."
+    ),
+    "OUTLIER_RATE_HIGH": (
+        "Kiểm tra bằng box-plot và IQR. Nếu right-skewed: log1p transform. "
+        "Nếu muốn giữ outlier: clip tại [Q1-1.5*IQR, Q3+1.5*IQR] thay vì xóa. "
+        "Không xóa outlier trước khi verify với domain expert — có thể là tín hiệu quan trọng. "
+        "Dùng robust scalers (RobustScaler) thay vì StandardScaler cho ML."
+    ),
+    "SKEWNESS_HIGH": (
+        "Thử log1p transform (nếu right-skewed và giá trị >= 0), "
+        "square-root (nếu count data), hoặc Box-Cox (nếu tất cả giá trị dương). "
+        "Kiểm tra lại skewness/kurtosis sau transform. "
+        "Tree-based models (XGBoost, Random Forest) không cần transform — chỉ Linear/NN cần."
+    ),
+    "TYPE_MISMATCH": (
+        "Ép kiểu với error handling: pd.to_numeric(col, errors='coerce') hoặc pd.to_datetime(col, errors='coerce'). "
+        "Log các row bị coerce thành NaN và kiểm tra pattern (thường là chuỗi lạ hoặc null marker). "
+        "Xem xét thêm data contract validation ở ingestion layer để bắt lỗi sớm."
+    ),
+    "CONSTANT_COLUMN": (
+        "Loại bỏ cột khỏi feature set ML — zero variance không mang thông tin. "
+        "Trước khi xóa: kiểm tra xem đây có phải placeholder ('N/A', 0) hay lỗi ETL không. "
+        "Dùng VarianceThreshold(threshold=0) trong sklearn để tự động filter."
+    ),
+    "HIGH_CARDINALITY": (
+        "Nếu là ID column: loại khỏi feature set. "
+        "Nếu là categorical thực: dùng target encoding (cho supervised) hoặc frequency encoding. "
+        "Tránh one-hot encoding khi cardinality > 50 — sẽ tạo sparse matrix rất lớn. "
+        "Cân nhắc embeddings cho NLP features hoặc khi cardinality > 1000."
+    ),
+    "FK_INTEGRITY_VIOLATION": (
+        "Không JOIN trực tiếp khi có FK violation — INNER JOIN sẽ mất rows, LEFT JOIN tạo NULL. "
+        "Quyết định: (1) fix upstream source, (2) dùng surrogate key, "
+        "(3) chấp nhận mất dữ liệu và document rõ ràng. "
+        "Báo cáo số lượng orphan rows cụ thể cho business stakeholders."
+    ),
+    "NOT_NULL_VIOLATION": (
+        "Cột được khai báo NOT NULL nhưng có null — cần điều tra nguồn gốc. "
+        "Impute bằng giá trị mặc định hợp lý (0, 'Unknown', median) hoặc xóa các row bị null. "
+        "Thêm NOT NULL constraint enforcement ở ingestion layer."
+    ),
+    "UNIQUE_VIOLATION": (
+        "Tìm các giá trị bị trùng và quyết định giữ bản ghi nào. "
+        "Nếu cột phải unique theo business logic: dedup ngay. "
+        "Nếu không: bỏ UNIQUE constraint và document lý do."
+    ),
+    "INCONSISTENT_FORMAT": (
+        "Normalize format: chuẩn hóa date về ISO 8601, phone về E.164, email về lowercase. "
+        "Dùng regex để validate và flag các giá trị không match pattern. "
+        "Tạo data cleaning pipeline có thể tái sử dụng thay vì fix one-off."
+    ),
+}
+
+_DETERMINISTIC_SUGGESTION_DEFAULT = (
+    "Kiểm tra các dòng bị ảnh hưởng. Tham khảo tab Hướng dẫn để biết các kỹ thuật xử lý phù hợp với loại vấn đề này."
+)
+
+
+def _get_deterministic_suggestion(issue_type: str) -> str:
+    """Trả về gợi ý xử lý cụ thể theo issue_type cho deterministic fallback."""
+    return _DETERMINISTIC_SUGGESTIONS.get(
+        issue_type.upper() if issue_type else "",
+        _DETERMINISTIC_SUGGESTION_DEFAULT,
+    )
+
+
 def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTableResult:
     """Fallback deterministc: tạo AnalystTableResult từ TableCluster, không cần LLM."""
     column_issues: list[ColumnIssue] = []
@@ -324,7 +450,6 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
         col = issue.get("affected_column") or issue.get("affected_table") or "dataset"
         col_issues_map.setdefault(col, []).append(issue)
 
-    table_name_str = table_cluster.table_name
     for col_name, issues in col_issues_map.items():
         for issue in issues:
             severity = issue.get("compound_severity") or issue.get("severity", "WARN")
@@ -332,6 +457,24 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
             affected_count = issue.get("affected_count", 0)
             affected_percent = issue.get("affected_percent")
             pct_str = f" ({affected_percent:.1%})" if affected_percent is not None else ""
+
+            # ML consequence per issue type
+            ml_consequence_map = {
+                "PK_DUPLICATE": "JOIN sẽ nhân rows, aggregation bị sai, model train trên dữ liệu bị lặp.",
+                "ORPHAN_FOREIGN_KEY": "LEFT JOIN tạo NULL rows, INNER JOIN mất dữ liệu âm thầm.",
+                "MISSINGNESS": "Cần imputation phù hợp trước khi train. Nếu MAR: tránh mean/median blind.",
+                "HIGH_MISSING_RATE": "Feature này không đáng tin cậy cho ML, cần quyết định giữ hay drop.",
+                "DUPLICATE_ROWS": "Data leakage nếu duplicate span qua train/test split, model overfit.",
+                "OUTLIER_RATE_HIGH": "Kéo lệch mean/std, ảnh hưởng Linear Regression và K-Means nghiêm trọng.",
+                "SKEWNESS_HIGH": "Linear models và Neural Networks bị ảnh hưởng — cần transform trước.",
+                "TYPE_MISMATCH": "Parse fail âm thầm trong production, feature bị coerce thành NaN.",
+                "CONSTANT_COLUMN": "Zero variance — feature này không có thông tin, nên loại khỏi feature set.",
+                "HIGH_CARDINALITY": "One-hot encoding tạo sparse matrix khổng lồ, tree models xử lý tốt hơn.",
+            }
+            ml_consequence = ml_consequence_map.get(
+                issue_type.upper() if issue_type else "",
+                "Cần kiểm tra cột này trước khi đưa vào mô hình.",
+            )
 
             column_issues.append(ColumnIssue(
                 column_name=col_name,
@@ -341,8 +484,8 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
                     f"{issue_type}: {issue.get('description', 'Phát hiện vấn đề')}. "
                     f"Ảnh hưởng: {affected_count} dòng{pct_str}."
                 ),
-                ml_consequence="Cần kiểm tra cột này trước khi đưa vào mô hình.",
-                suggested_action="Xem xét các dòng bị ảnh hưởng và quyết định cách xử lý phù hợp.",
+                ml_consequence=ml_consequence,
+                suggested_action=_get_deterministic_suggestion(issue_type),
                 evidence_ref=issue.get("finding_id"),
             ))
 
