@@ -142,8 +142,40 @@ def _parse_dbml(path: str) -> dict:
                 "pk": bool(c.pk),
                 "unique": bool(c.unique),
                 "not_null": bool(c.not_null),
+                "composite_pk_member": False,  # will be set below if composite PK found
             }
-        tables[t.name] = {"columns": cols}
+
+        # Detect composite PK from indexes block
+        # e.g. indexes { (PlaylistId, TrackId) [pk] }
+        composite_pk_columns: list[str] = []
+        for idx in getattr(t, "indexes", []) or []:
+            is_pk_index = getattr(idx, "pk", False)
+            subjects = getattr(idx, "subjects", []) or []
+            if is_pk_index and len(subjects) > 1:
+                col_names = []
+                for subj in subjects:
+                    # pydbml subjects can be Column objects or strings
+                    col_name = getattr(subj, "name", None) or str(subj)
+                    col_names.append(col_name)
+                if len(col_names) > 1:
+                    composite_pk_columns = col_names
+                    # Override individual pk=True flags on these columns.
+                    # They are NOT independent PKs — the uniqueness constraint
+                    # is on the combined tuple (PlaylistId, TrackId), not each alone.
+                    for col_name in composite_pk_columns:
+                        if col_name in cols:
+                            cols[col_name]["pk"] = False
+                            cols[col_name]["composite_pk_member"] = True
+                    logger.info(
+                        "Table '%s': composite PK detected: %s",
+                        t.name, composite_pk_columns,
+                    )
+                    break  # only one composite PK per table
+
+        tables[t.name] = {
+            "columns": cols,
+            "composite_pk_columns": composite_pk_columns,  # [] if single-col PK
+        }
 
     # --- refs (cut-paste of old normalize_refs logic) ---
     refs: list[dict] = []

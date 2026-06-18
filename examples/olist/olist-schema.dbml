@@ -1,0 +1,92 @@
+// Olist Brazilian E-Commerce Database
+// Source: https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+// 9 tables, ~100K orders from 2016-2018
+// Nhiều NULL values: review_comment_message, review_comment_title
+// Có cancelled orders, FK mismatches thực tế
+
+Table olist_customers_dataset {
+  customer_id varchar(32) [pk]
+  customer_unique_id varchar(32) [not null]
+  customer_zip_code_prefix varchar(5)
+  customer_city varchar(60)
+  customer_state varchar(2)
+}
+
+Table olist_geolocation_dataset {
+  geolocation_zip_code_prefix varchar(5) [pk]
+  geolocation_lat float
+  geolocation_lng float
+  geolocation_city varchar(60)
+  geolocation_state varchar(2)
+}
+
+Table olist_sellers_dataset {
+  seller_id varchar(32) [pk]
+  seller_zip_code_prefix varchar(5)
+  seller_city varchar(60)
+  seller_state varchar(2)
+}
+
+Table product_category_name_translation {
+  product_category_name varchar(60) [pk]
+  product_category_name_english varchar(60)
+}
+
+Table olist_products_dataset {
+  product_id varchar(32) [pk]
+  product_category_name varchar(60) [ref: > product_category_name_translation.product_category_name]
+  product_name_length integer
+  product_description_length integer
+  product_photos_qty integer
+  product_weight_g float
+  product_length_cm float
+  product_height_cm float
+  product_width_cm float
+}
+
+Table olist_orders_dataset {
+  order_id varchar(32) [pk]
+  customer_id varchar(32) [not null, ref: > olist_customers_dataset.customer_id]
+  order_status varchar(15) [not null]  // delivered, shipped, canceled, etc.
+  order_purchase_timestamp timestamp
+  order_approved_at timestamp           // NULL nếu chưa approved
+  order_delivered_carrier_date timestamp // NULL nếu chưa giao carrier
+  order_delivered_customer_date timestamp // NULL nếu chưa giao khách
+  order_estimated_delivery_date timestamp
+}
+
+Table olist_order_items_dataset {
+  order_id varchar(32) [pk, ref: > olist_orders_dataset.order_id]
+  order_item_id integer [pk]
+  product_id varchar(32) [not null, ref: > olist_products_dataset.product_id]
+  seller_id varchar(32) [not null, ref: > olist_sellers_dataset.seller_id]
+  shipping_limit_date timestamp
+  price decimal(10,2) [not null]
+  freight_value decimal(10,2) [not null]
+
+  indexes {
+    (order_id, order_item_id) [pk]
+  }
+}
+
+Table olist_order_payments_dataset {
+  order_id varchar(32) [pk, ref: > olist_orders_dataset.order_id]
+  payment_sequential integer [pk]
+  payment_type varchar(20) [not null]  // credit_card, boleto, voucher, debit_card
+  payment_installments integer [not null]
+  payment_value decimal(10,2) [not null]
+
+  indexes {
+    (order_id, payment_sequential) [pk]
+  }
+}
+
+Table olist_order_reviews_dataset {
+  review_id varchar(32) [pk]
+  order_id varchar(32) [not null, ref: > olist_orders_dataset.order_id]
+  review_score integer [not null]  // 1-5
+  review_comment_title varchar(64)   // NULL nếu không có tiêu đề
+  review_comment_message text        // NULL nếu không có bình luận (~60% NULL)
+  review_creation_date timestamp
+  review_answer_timestamp timestamp
+}

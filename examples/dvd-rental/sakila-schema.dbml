@@ -1,0 +1,148 @@
+// Sakila/DVD Rental Database — Video Rental Store
+// Source: https://github.com/ivanceras/sakila
+// 16 tables, ~50K rows, nhiều NULL values thực tế (rental dates, return dates)
+
+Table country {
+  country_id smallint [pk, increment]
+  country varchar(50) [not null]
+  last_update timestamp [not null]
+}
+
+Table city {
+  city_id smallint [pk, increment]
+  city varchar(50) [not null]
+  country_id smallint [not null, ref: > country.country_id]
+  last_update timestamp [not null]
+}
+
+Table address {
+  address_id smallint [pk, increment]
+  address varchar(50) [not null]
+  address2 varchar(50)
+  district varchar(20) [not null]
+  city_id smallint [not null, ref: > city.city_id]
+  postal_code varchar(10)
+  phone varchar(20) [not null]
+  last_update timestamp [not null]
+}
+
+Table language {
+  language_id tinyint [pk, increment]
+  name char(20) [not null]
+  last_update timestamp [not null]
+}
+
+Table category {
+  category_id tinyint [pk, increment]
+  name varchar(25) [not null]
+  last_update timestamp [not null]
+}
+
+Table actor {
+  actor_id smallint [pk, increment]
+  first_name varchar(45) [not null]
+  last_name varchar(45) [not null]
+  last_update timestamp [not null]
+}
+
+Table film {
+  film_id smallint [pk, increment]
+  title varchar(255) [not null]
+  description text
+  release_year year
+  language_id tinyint [not null, ref: > language.language_id]
+  original_language_id tinyint [ref: > language.language_id]
+  rental_duration tinyint [not null]
+  rental_rate decimal(4,2) [not null]
+  length smallint
+  replacement_cost decimal(5,2) [not null]
+  rating enum
+  special_features set
+  last_update timestamp [not null]
+}
+
+Table film_actor {
+  actor_id smallint [pk, ref: > actor.actor_id]
+  film_id smallint [pk, ref: > film.film_id]
+  last_update timestamp [not null]
+
+  indexes {
+    (actor_id, film_id) [pk]
+  }
+}
+
+Table film_category {
+  film_id smallint [pk, ref: > film.film_id]
+  category_id tinyint [pk, ref: > category.category_id]
+  last_update timestamp [not null]
+
+  indexes {
+    (film_id, category_id) [pk]
+  }
+}
+
+Table film_text {
+  film_id smallint [pk]
+  title varchar(255) [not null]
+  description text
+}
+
+Table store {
+  store_id tinyint [pk, increment]
+  manager_staff_id tinyint [not null]
+  address_id smallint [not null, ref: > address.address_id]
+  last_update timestamp [not null]
+}
+
+Table staff {
+  staff_id tinyint [pk, increment]
+  first_name varchar(45) [not null]
+  last_name varchar(45) [not null]
+  address_id smallint [not null, ref: > address.address_id]
+  picture blob
+  email varchar(50)
+  store_id tinyint [not null, ref: > store.store_id]
+  active boolean [not null]
+  username varchar(16) [not null]
+  password varchar(40)
+  last_update timestamp [not null]
+}
+
+Table customer {
+  customer_id smallint [pk, increment]
+  store_id tinyint [not null, ref: > store.store_id]
+  first_name varchar(45) [not null]
+  last_name varchar(45) [not null]
+  email varchar(50)
+  address_id smallint [not null, ref: > address.address_id]
+  active boolean [not null]
+  create_date datetime [not null]
+  last_update timestamp
+}
+
+Table inventory {
+  inventory_id mediumint [pk, increment]
+  film_id smallint [not null, ref: > film.film_id]
+  store_id tinyint [not null, ref: > store.store_id]
+  last_update timestamp [not null]
+}
+
+Table rental {
+  rental_id integer [pk, increment]
+  rental_date datetime [not null]
+  inventory_id mediumint [not null, ref: > inventory.inventory_id]
+  customer_id smallint [not null, ref: > customer.customer_id]
+  return_date datetime
+  staff_id tinyint [not null, ref: > staff.staff_id]
+  last_update timestamp [not null]
+}
+
+Table payment {
+  payment_id smallint [pk, increment]
+  customer_id smallint [not null, ref: > customer.customer_id]
+  staff_id tinyint [not null, ref: > staff.staff_id]
+  rental_id integer [ref: > rental.rental_id]
+  amount decimal(5,2) [not null]
+  payment_date datetime [not null]
+  last_update timestamp
+}

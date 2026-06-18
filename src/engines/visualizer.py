@@ -335,8 +335,14 @@ def draw_stacked_bar_issues(
         # Group by (table, severity)
         table_severity: dict[str, dict[str, int]] = {}
         for issue in verdict.top_issues:
-            table = issue.get("affected_table") or issue.get("affected_column", "dataset")
-            severity = issue.get("severity", "WARN")
+            # Support both dict and IssueSummary / dataclass objects
+            def _get(obj, key, default=None):
+                if isinstance(obj, dict):
+                    return obj.get(key, default)
+                return getattr(obj, key, default)
+
+            table = _get(issue, "affected_table") or _get(issue, "affected_column", "dataset")
+            severity = _get(issue, "severity", "WARN")
             table_severity.setdefault(table, {"CRITICAL": 0, "HIGH": 0, "WARN": 0})
             if severity in table_severity[table]:
                 table_severity[table][severity] += 1

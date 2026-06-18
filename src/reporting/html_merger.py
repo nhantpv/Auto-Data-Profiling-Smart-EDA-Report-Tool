@@ -564,12 +564,45 @@ def _visual_overview(verdict: DatasetVerdict) -> str:
 def _science_brief(verdict: DatasetVerdict) -> str:
     summary = verdict.summary
     meta = verdict.dataset_meta
+    verdict_val = verdict.verdict.value
+    # Derive human-readable formula explanation based on verdict
+    if verdict_val == "READY":
+        formula_explain = (
+            f"<strong>READY</strong>: {_format_int(summary.critical)} critical, "
+            f"{_format_int(summary.high)} high, {_format_int(summary.warn)} warn — "
+            "Zero critical issues and at most 2 high-severity findings → dataset approved for use."
+        )
+    elif verdict_val == "NOT_READY":
+        formula_explain = (
+            f"<strong>NOT_READY</strong>: {_format_int(summary.critical)} critical issue(s) detected — "
+            "any CRITICAL finding blocks dataset use until resolved."
+        )
+    else:  # WARN
+        formula_explain = (
+            f"<strong>WARN</strong>: {_format_int(summary.critical)} critical, "
+            f"{_format_int(summary.high)} high — "
+            "No critical issues but high-severity findings require review before production use."
+        )
     return f"""
-<section class="science-brief science-brief-{html.escape(verdict.verdict.value)}">
+<section class="science-brief science-brief-{html.escape(verdict_val)}">
   <div class="science-brief-copy">
     <p class="eyebrow">Data Science Brief</p>
     <h2>{html.escape(_verdict_headline(verdict))}</h2>
     <p><strong>Decision signal:</strong> {html.escape(verdict.verdict_rationale)}</p>
+    <details class="verdict-formula-details">
+      <summary>Xem công thức phán quyết ▾</summary>
+      <div class="verdict-formula-body">
+        <p>{formula_explain}</p>
+        <table class="verdict-formula-table">
+          <thead><tr><th>Verdict</th><th>Điều kiện</th></tr></thead>
+          <tbody>
+            <tr class="{"vf-active" if verdict_val == "READY" else ""}"><td>✅ READY</td><td>0 Critical AND ≤ 2 High</td></tr>
+            <tr class="{"vf-active" if verdict_val == "WARN" else ""}"><td>⚠️ WARN</td><td>0 Critical AND &gt; 2 High</td></tr>
+            <tr class="{"vf-active" if verdict_val == "NOT_READY" else ""}"><td>❌ NOT_READY</td><td>≥ 1 Critical</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
   </div>
   <div class="science-scoreboard" aria-label="Decision metrics">
     <div class="science-score science-score-critical"><span>Critical</span><strong>{_format_int(summary.critical)}</strong></div>
@@ -579,6 +612,8 @@ def _science_brief(verdict: DatasetVerdict) -> str:
   </div>
 </section>
 """
+
+
 
 
 def _issue_spotlight(verdict: DatasetVerdict) -> str:
@@ -871,6 +906,10 @@ _ISSUE_COPY = {
         "Primary-key integrity blocker",
         "Primary-key values are duplicated, so entity identity and downstream joins are unsafe until deduped.",
     ),
+    "COMPOSITE_PK_DUPLICATE": (
+        "Composite primary-key integrity blocker",
+        "The combined key tuple is not unique — rows share the same composite PK, violating the uniqueness constraint on the junction table.",
+    ),
     "ORPHAN_FOREIGN_KEY": (
         "Relationship integrity blocker",
         "Foreign-key values point to missing parent records; joins can drop rows or attach the wrong context.",
@@ -892,6 +931,7 @@ _ISSUE_COPY = {
         "Duplicate rows can inflate counts, aggregates, and model training signals.",
     ),
 }
+
 
 
 def _cluster_copy(issue_type: str) -> tuple[str, str]:
@@ -1173,6 +1213,47 @@ def _col_stats_for_table(
     return result
 
 
+def _build_data_sample_html(df: object, table_name: str, n_rows: int = 5) -> str:
+    """Build a compact HTML data sample table for a given DataFrame.
+
+    Returns empty string if df is None or import fails.
+    """
+    try:
+        import pandas as pd  # type: ignore
+        if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+            return ""
+        sample = df.head(n_rows)
+        # Build header
+        th_cells = "".join(f"<th>{html.escape(str(c))}</th>" for c in sample.columns)
+        # Build rows
+        tr_rows: list[str] = []
+        for _, row in sample.iterrows():
+            tds = []
+            for val in row:
+                if val is None or (isinstance(val, float) and __import__('math').isnan(val)):
+                    tds.append('<td class="null-cell">NULL</td>')
+                else:
+                    cell_str = str(val)
+                    if len(cell_str) > 60:
+                        cell_str = cell_str[:57] + "..."
+                    tds.append(f"<td>{html.escape(cell_str)}</td>")
+            tr_rows.append(f"<tr>{''.join(tds)}</tr>")
+        return (
+            '<section class="data-sample-section">'
+            '<div class="section-heading">'
+            '<p class="eyebrow">Data Sample</p>'
+            f'<h3>5 dòng đầu — <code>{html.escape(table_name)}</code></h3>'
+            '</div>'
+            '<div class="data-sample-wrapper">'
+            '<table class="data-sample-table">'
+            f'<thead><tr>{th_cells}</tr></thead>'
+            f'<tbody>{"".join(tr_rows)}</tbody>'
+            '</table></div></section>'
+        )
+    except Exception:
+        return ""
+
+
 def _table_tab_panel(
     table_result: object,
     tab_id: str,
@@ -1180,6 +1261,7 @@ def _table_tab_panel(
     profile_links: dict[str, str],
     findings_columns: dict | None,
     is_active: bool = False,
+    table_data_samples: dict[str, str] | None = None,
 ) -> str:
     """Render nội dung 1 tab bảng: AI insights trước, YData stats ở dưới."""
     table_name: str = getattr(table_result, "table_name", "")
@@ -1225,6 +1307,8 @@ def _table_tab_panel(
             f'</div>'
         )
 
+    sample_html = (table_data_samples or {}).get(table_name, "")
+
     content = _structured_table_result_card(table_result, chart_paths, col_stats)
     active_attr = ' class="tab-content active"' if is_active else ' class="tab-content"'
     hidden_attr = "" if is_active else " hidden"
@@ -1232,6 +1316,7 @@ def _table_tab_panel(
         f'<section id="tab-{tab_id}"{active_attr}'
         f' role="tabpanel" aria-labelledby="tab-button-{tab_id}"{hidden_attr}>'
         f'{content}'
+        f'{sample_html}'
         f'{ydata_section}'
         f'</section>'
     )
@@ -1270,10 +1355,17 @@ def _missingness_diagnostic_table(findings: object) -> str:
                 "INDET. ?",
                 "Quá ít giá trị thiếu để xác định cơ chế. Kiểm tra lại khi có thêm dữ liệu.",
             ),
+            "STRUCTURAL_ABSENT": (
+                "cstat-structural",
+                "OPTIONAL 🔵",
+                "Cột tùy chọn — NULL có thể có nghĩa 'không áp dụng' (vd: Fax, Company). "
+                "KHÔNG nên impute. Xác nhận với chủ sở hữu dữ liệu trước khi xử lý.",
+            ),
         }
         css_cls, badge_label, action_text = _MECH_INFO.get(
             mechanism, ("cstat-indet", html.escape(mechanism), "")
         )
+
         rows.append(
             f'<tr>'
             f'<td><code>{html.escape(display_name)}</code></td>'
@@ -1691,6 +1783,7 @@ def merge_to_tabbed_html(
     all_table_names: list[str] | None = None,
     out_dir: str | None = None,
     findings: object = None,
+    table_data_samples: dict[str, str] | None = None,
 ) -> str:
     """Ghép tất cả thành 1 file HTML với dynamic tabs.
 
@@ -1779,6 +1872,7 @@ def merge_to_tabbed_html(
                 profile_links=profile_links,
                 findings_columns=findings_columns,
                 is_active=False,
+                table_data_samples=table_data_samples,
             )
         )
     # Track which tables already have AI analysis (normalize for fuzzy match)

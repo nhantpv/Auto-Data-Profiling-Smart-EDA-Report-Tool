@@ -57,11 +57,17 @@ def calibrate_columns(
         # Completeness
         if stats.p_missing > 0:
             sev = _missingness_severity(stats.p_missing, completeness_cfg["thresholds"])
-            # Escalate by 1 tier for MAR missingness (predictable missing is more
-            # dangerous than MCAR).  QĐ-6a: "MNAR?" retired — only MAR escalates.
-            if stats.missingness_mechanism == "MAR":
+            mech = stats.missingness_mechanism
+            # MAR: escalate by 1 tier (predictable missing is more dangerous than MCAR).
+            # QĐ-6a: "MNAR?" retired — only MAR escalates.
+            # STRUCTURAL_ABSENT: de-escalate by 1 tier — NULL means "not applicable"
+            #   for optional fields (e.g. Fax, Company); not a real data quality problem.
+            if mech == "MAR":
                 idx = SEVERITY_ORDER.index(sev)
                 sev = SEVERITY_ORDER[min(idx + 1, len(SEVERITY_ORDER) - 1)]
+            elif mech == "STRUCTURAL_ABSENT":
+                idx = SEVERITY_ORDER.index(sev)
+                sev = SEVERITY_ORDER[max(idx - 1, 0)]
             registry.register_anomaly(AnomalyRecord(
                 issue_type="MISSINGNESS",
                 description=f"Column '{col_name}' has {stats.p_missing:.1%} missing values",

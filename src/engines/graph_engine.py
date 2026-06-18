@@ -132,6 +132,7 @@ def accepted_relationships_from_graph(
 def reconstruct_graph(
     tables: dict[str, pd.DataFrame],
     schema: SchemaEvaluationFindings | None = None,
+    composite_pk_tables: set[str] | None = None,
 ) -> GraphResult:
     """Reconstruct relationship graph with cardinality and PK validation.
 
@@ -141,10 +142,14 @@ def reconstruct_graph(
        b. check_pk_uniqueness(parent_df, parent_col)
        c. Tạo GraphEdge
     3. Nếu PK không unique → thêm vào non_unique_pk_tables + warning
+       (EXCEPTION: junction/bridge tables with composite PK are skipped —
+       their individual columns are intentionally non-unique)
 
     Args:
         tables: Dict mapping table_name → DataFrame.
         schema: Parsed schema with relationships. If None, returns empty graph.
+        composite_pk_tables: Set of table names known to have composite PKs
+            (e.g. PlaylistTrack). NON_UNIQUE_PARENT_PK is suppressed for these.
 
     Returns:
         GraphResult với edges[], warnings[], non_unique_pk_tables[]
@@ -153,6 +158,8 @@ def reconstruct_graph(
         return GraphResult(
             warnings=["No schema or relationships provided — graph is empty"],
         )
+
+    _composite_pk_tables: set[str] = composite_pk_tables or set()
 
     edges: list[GraphEdge] = []
     integrity_errors: list[IntegrityError] = []
@@ -188,12 +195,11 @@ def reconstruct_graph(
         # Classify cardinality
         cardinality = classify_cardinality(child_df, child_column, parent_df, parent_column)
 
-        # PK runtime uniqueness check. A non-unique parent key is still a
-        # data-quality error, but L3b safe-join can collapse the parent before
-        # merge, so the relationship edge remains visible for downstream
-        # evidence and guarded cross-table analysis.
+        # PK runtime uniqueness check.
+        # Junction tables (composite PK) intentionally have non-unique individual
+        # columns — suppress NON_UNIQUE_PARENT_PK for them to avoid false positives.
         pk_unique = check_pk_uniqueness(parent_df, parent_column)
-        if not pk_unique:
+        if not pk_unique and parent_table not in _composite_pk_tables:
             duplicate_count = int(parent_df[parent_column].duplicated(keep=False).sum())
             if parent_table not in seen_non_unique:
                 seen_non_unique.add(parent_table)
@@ -221,6 +227,14 @@ def reconstruct_graph(
                 probable_causes=get_causes("NON_UNIQUE_PARENT_PK"),
                 suggested_fix=get_fixes("NON_UNIQUE_PARENT_PK"),
             )))
+        elif not pk_unique and parent_table in _composite_pk_tables:
+            # Junction table: log info but don't raise integrity error
+            logger.info(
+                "Skipping NON_UNIQUE_PARENT_PK for junction table '%s.%s' "
+                "(composite PK — individual column non-uniqueness is expected)",
+                parent_table, parent_column,
+            )
+
         role = classify_relationship_role(cardinality, child_table, parent_table)
 
         edges.append(GraphEdge(

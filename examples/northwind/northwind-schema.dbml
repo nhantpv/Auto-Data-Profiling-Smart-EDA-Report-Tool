@@ -1,0 +1,127 @@
+// Northwind Database — Wholesale Trading Company
+// Source: https://github.com/uwla/sample_mysql_database
+
+Table categories {
+  CategoryID integer [pk]
+  CategoryName varchar(15) [not null]
+  Description text
+  Picture blob
+}
+
+Table suppliers {
+  SupplierID integer [pk]
+  CompanyName varchar(40) [not null]
+  ContactName varchar(30)
+  ContactTitle varchar(30)
+  Address varchar(60)
+  City varchar(15)
+  Region varchar(15)
+  PostalCode varchar(10)
+  Country varchar(15)
+  Phone varchar(24)
+  Fax varchar(24)
+  HomePage text
+}
+
+Table products {
+  ProductID integer [pk]
+  ProductName varchar(40) [not null]
+  SupplierID integer [ref: > suppliers.SupplierID]
+  CategoryID integer [ref: > categories.CategoryID]
+  QuantityPerUnit varchar(20)
+  UnitPrice decimal(10,4)
+  UnitsInStock smallint
+  UnitsOnOrder smallint
+  ReorderLevel smallint
+  Discontinued integer [not null]
+}
+
+Table regions {
+  RegionID integer [pk]
+  RegionDescription varchar(50) [not null]
+}
+
+Table territories {
+  TerritoryID varchar(20) [pk]
+  TerritoryDescription varchar(50) [not null]
+  RegionID integer [not null, ref: > regions.RegionID]
+}
+
+Table employees {
+  EmployeeID integer [pk]
+  LastName varchar(20) [not null]
+  FirstName varchar(10) [not null]
+  Title varchar(30)
+  TitleOfCourtesy varchar(25)
+  BirthDate datetime
+  HireDate datetime
+  Address varchar(60)
+  City varchar(15)
+  Region varchar(15)
+  PostalCode varchar(10)
+  Country varchar(15)
+  HomePhone varchar(24)
+  Extension varchar(4)
+  Photo blob
+  Notes text
+  ReportsTo integer [ref: > employees.EmployeeID]
+  PhotoPath varchar(255)
+}
+
+Table employee_territories {
+  EmployeeID integer [pk, ref: > employees.EmployeeID]
+  TerritoryID varchar(20) [pk, ref: > territories.TerritoryID]
+
+  indexes {
+    (EmployeeID, TerritoryID) [pk]
+  }
+}
+
+Table shippers {
+  ShipperID integer [pk]
+  CompanyName varchar(40) [not null]
+  Phone varchar(24)
+}
+
+Table customers {
+  CustomerID varchar(5) [pk]
+  CompanyName varchar(40) [not null]
+  ContactName varchar(30)
+  ContactTitle varchar(30)
+  Address varchar(60)
+  City varchar(15)
+  Region varchar(15)
+  PostalCode varchar(10)
+  Country varchar(15)
+  Phone varchar(24)
+  Fax varchar(24)
+}
+
+Table orders {
+  OrderID integer [pk]
+  CustomerID varchar(5) [ref: > customers.CustomerID]
+  EmployeeID integer [ref: > employees.EmployeeID]
+  OrderDate datetime
+  RequiredDate datetime
+  ShippedDate datetime
+  ShipVia integer [ref: > shippers.ShipperID]
+  Freight decimal(10,4)
+  ShipName varchar(40)
+  ShipAddress varchar(60)
+  ShipCity varchar(15)
+  ShipRegion varchar(15)
+  ShipPostalCode varchar(10)
+  ShipCountry varchar(15)
+}
+
+Table order_details {
+  OrderID integer [pk, ref: > orders.OrderID]
+  ProductID integer [pk, ref: > products.ProductID]
+  UnitPrice decimal(10,4) [not null]
+  Quantity smallint [not null]
+  Discount real [not null]
+
+  indexes {
+    (OrderID, ProductID) [pk]
+  }
+}

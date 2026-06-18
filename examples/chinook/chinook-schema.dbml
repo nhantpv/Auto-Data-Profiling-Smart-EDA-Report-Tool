@@ -1,0 +1,103 @@
+// Chinook Database — Digital Media Store
+// Source: https://github.com/lerocha/chinook-database
+
+Table Artist {
+  ArtistId integer [pk, increment]
+  Name varchar(120)
+}
+
+Table Album {
+  AlbumId integer [pk, increment]
+  Title varchar(160) [not null]
+  ArtistId integer [not null, ref: > Artist.ArtistId]
+}
+
+Table MediaType {
+  MediaTypeId integer [pk, increment]
+  Name varchar(120)
+}
+
+Table Genre {
+  GenreId integer [pk, increment]
+  Name varchar(120)
+}
+
+Table Track {
+  TrackId integer [pk, increment]
+  Name varchar(200) [not null]
+  AlbumId integer [ref: > Album.AlbumId]
+  MediaTypeId integer [not null, ref: > MediaType.MediaTypeId]
+  GenreId integer [ref: > Genre.GenreId]
+  Composer varchar(220)
+  Milliseconds integer [not null]
+  Bytes integer
+  UnitPrice decimal(10,2) [not null]
+}
+
+Table Playlist {
+  PlaylistId integer [pk, increment]
+  Name varchar(120)
+}
+
+Table PlaylistTrack {
+  PlaylistId integer [pk, ref: > Playlist.PlaylistId]
+  TrackId integer [pk, ref: > Track.TrackId]
+
+  indexes {
+    (PlaylistId, TrackId) [pk]
+  }
+}
+
+Table Employee {
+  EmployeeId integer [pk, increment]
+  LastName varchar(20) [not null]
+  FirstName varchar(20) [not null]
+  Title varchar(30)
+  ReportsTo integer [ref: > Employee.EmployeeId]
+  BirthDate datetime
+  HireDate datetime
+  Address varchar(70)
+  City varchar(40)
+  State varchar(40)
+  Country varchar(40)
+  PostalCode varchar(10)
+  Phone varchar(24)
+  Fax varchar(24)
+  Email varchar(60)
+}
+
+Table Customer {
+  CustomerId integer [pk, increment]
+  FirstName varchar(40) [not null]
+  LastName varchar(20) [not null]
+  Company varchar(80)
+  Address varchar(70)
+  City varchar(40)
+  State varchar(40)
+  Country varchar(40)
+  PostalCode varchar(10)
+  Phone varchar(24)
+  Fax varchar(24)
+  Email varchar(60) [not null]
+  SupportRepId integer [ref: > Employee.EmployeeId]
+}
+
+Table Invoice {
+  InvoiceId integer [pk, increment]
+  CustomerId integer [not null, ref: > Customer.CustomerId]
+  InvoiceDate datetime [not null]
+  BillingAddress varchar(70)
+  BillingCity varchar(40)
+  BillingState varchar(40)
+  BillingCountry varchar(40)
+  BillingPostalCode varchar(10)
+  Total decimal(10,2) [not null]
+}
+
+Table InvoiceLine {
+  InvoiceLineId integer [pk, increment]
+  InvoiceId integer [not null, ref: > Invoice.InvoiceId]
+  TrackId integer [not null, ref: > Track.TrackId]
+  UnitPrice decimal(10,2) [not null]
+  Quantity integer [not null]
+}

@@ -123,17 +123,18 @@ DBML_FAMILY = {
 }
 
 _SEVERITY = {
-    "MISSING_COLUMN":      (Severity.CRITICAL, ["Consistency"]),
-    "PK_DUPLICATE":        (Severity.CRITICAL, ["Uniqueness"]),
-    "PK_NULL":             (Severity.CRITICAL, ["Completeness"]),
-    "ORPHAN_FOREIGN_KEY":  (Severity.CRITICAL, ["Consistency"]),
-    "TYPE_MISMATCH":       (Severity.HIGH,     ["Validity"]),
-    "UNIQUE_VIOLATION":    (Severity.HIGH,     ["Uniqueness"]),
-    "NOT_NULL_VIOLATION":  (Severity.HIGH,     ["Completeness"]),
-    "EXTRA_COLUMN":        (Severity.INFO,     ["Consistency"]),
-    "FK_UNCHECKED":        (Severity.WARN,     ["Consistency"]),
-    "MISSING_TABLE":       (Severity.WARN,     ["Completeness"]),
-    "COLUMN_ALIAS_INFERRED": (Severity.WARN,   ["Consistency"]),
+    "MISSING_COLUMN":          (Severity.CRITICAL, ["Consistency"]),
+    "PK_DUPLICATE":            (Severity.CRITICAL, ["Uniqueness"]),
+    "COMPOSITE_PK_DUPLICATE":  (Severity.CRITICAL, ["Uniqueness"]),
+    "PK_NULL":                 (Severity.CRITICAL, ["Completeness"]),
+    "ORPHAN_FOREIGN_KEY":      (Severity.CRITICAL, ["Consistency"]),
+    "TYPE_MISMATCH":           (Severity.HIGH,     ["Validity"]),
+    "UNIQUE_VIOLATION":        (Severity.HIGH,     ["Uniqueness"]),
+    "NOT_NULL_VIOLATION":      (Severity.HIGH,     ["Completeness"]),
+    "EXTRA_COLUMN":            (Severity.INFO,     ["Consistency"]),
+    "FK_UNCHECKED":            (Severity.WARN,     ["Consistency"]),
+    "MISSING_TABLE":           (Severity.WARN,     ["Completeness"]),
+    "COLUMN_ALIAS_INFERRED":   (Severity.WARN,     ["Consistency"]),
     "MISSING_RELATIONSHIP_METADATA": (Severity.WARN, ["Consistency"]),
 }
 
@@ -343,6 +344,29 @@ def validate_table(df: pd.DataFrame, table_name: str, parsed: dict) -> list:
     errors = []
     alias_map: dict[str, str] = {}
 
+    # ── Composite PK check ────────────────────────────────────────────────────
+    # Read composite_pk_columns from parsed schema (set by schema_reader when
+    # DBML has `indexes { (col1, col2) [pk] }`).
+    composite_pk_cols: list[str] = parsed[table_name].get("composite_pk_columns", [])
+    # Resolve actual DataFrame column names (alias-aware)
+    composite_pk_actual: list[str] = [c for c in composite_pk_cols if c in df_cols]
+    composite_pk_members: set[str] = set(composite_pk_cols)  # for skipping individual checks
+
+    if composite_pk_actual and len(composite_pk_actual) == len(composite_pk_cols):
+        # All composite PK columns present → check tuple uniqueness
+        dup_mask = df.duplicated(subset=composite_pk_actual, keep=False)
+        if dup_mask.any():
+            n = int(dup_mask.sum())
+            samples = df[dup_mask][composite_pk_actual].head(10).to_dict(orient="records")
+            errors.append(_err(
+                "COMPOSITE_PK_DUPLICATE", table_name, ",".join(composite_pk_actual), n,
+                (
+                    f"Composite PK ({', '.join(composite_pk_actual)}) has {n} duplicate "
+                    f"tuple(s) — the combined key is not unique"
+                ),
+                samples,
+            ))
+
     # MISSING_COLUMN / EXTRA_COLUMN
     for col in schema_cols:
         if col not in df_cols:
@@ -390,8 +414,9 @@ def validate_table(df: pd.DataFrame, table_name: str, parsed: dict) -> list:
                                    f"Column '{col}' (data column '{data_col}'): expected family '{dbml_fam}', got '{pandas_fam}' (dtype={series.dtype})",
                                    [{"value": v} for v in samples]))
 
-        # PK checks
-        if meta["pk"]:
+        # PK checks — SKIP if column is part of a composite PK
+        # (composite tuple uniqueness was already checked above)
+        if meta["pk"] and col not in composite_pk_members:
             null_mask = series.isna()
             if null_mask.any():
                 n = int(null_mask.sum())
@@ -405,6 +430,10 @@ def validate_table(df: pd.DataFrame, table_name: str, parsed: dict) -> list:
                 errors.append(_err("PK_DUPLICATE", table_name, col, n,
                                    f"PK column '{col}' has {n} duplicate value(s)", samples))
             continue  # pk implies unique; skip separate unique/not_null checks
+
+        # Skip individual unique/not_null checks for composite PK members too
+        if col in composite_pk_members:
+            continue
 
         # NOT_NULL_VIOLATION (non-pk, not_null declared)
         if meta["not_null"]:
@@ -426,6 +455,7 @@ def validate_table(df: pd.DataFrame, table_name: str, parsed: dict) -> list:
                                    f"Column '{col}' has {n} duplicate value(s) but is declared UNIQUE", samples))
 
     return errors
+
 
 
 # ── (normalize_refs moved to ingestion/schema_reader.py) ─────────────────────

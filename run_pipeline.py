@@ -173,6 +173,28 @@ def _load_tables_for_cross_analysis(data_paths: list, schema_path: str | None) -
     return load_tables_by_path(data_paths)
 
 
+def _get_composite_pk_tables(schema_path: str | None) -> set[str]:
+    """Return names of tables with composite PKs declared in DBML `indexes` block.
+
+    These are junction/bridge tables (e.g. PlaylistTrack) where individual
+    columns are intentionally non-unique.  The set is used to suppress
+    NON_UNIQUE_PARENT_PK false positives in graph_engine.reconstruct_graph().
+    """
+    if not schema_path:
+        return set()
+    try:
+        parsed = parse_schema(schema_path)["tables"]
+        return {
+            table_name
+            for table_name, table_meta in parsed.items()
+            if table_meta.get("composite_pk_columns")
+        }
+    except Exception as exc:
+        logger.warning("_get_composite_pk_tables: failed to parse schema '%s': %s", schema_path, exc)
+        return set()
+
+
+
 def _safe_ydata_html(df: pd.DataFrame | None, minimal: bool = True) -> str:
     if df is None:
         return (
@@ -555,7 +577,17 @@ def run(
     # Layer 2.5a — Missingness classification (MCAR/MAR/MNAR)
     bus.emit("🔍 Phân loại missing values", 0.36, status="running", step_id="missing")
     logger.info("[L2.5a] Phân loại missing values (MCAR/MAR/MNAR)")
-    mechs = detect_missingness(df)
+    # Pass schema_cols so STRUCTURAL_ABSENT heuristic can check optional fields.
+    _schema_cols_for_mech: dict | None = None
+    if schema_path:
+        try:
+            _parsed_mech = parse_schema(schema_path)["tables"]
+            _stem_mech = Path(data_path).stem.lower()
+            _tbl_mech = next((v for k, v in _parsed_mech.items() if k.lower() == _stem_mech), None)
+            _schema_cols_for_mech = _tbl_mech.get("columns") if _tbl_mech else None
+        except Exception:
+            _schema_cols_for_mech = None
+    mechs = detect_missingness(df, schema_cols=_schema_cols_for_mech)
 
     # Layer 3 — Build findings JSON
     findings = build_data_quality_findings(
@@ -624,15 +656,21 @@ def run(
     bus.emit("📄 Xuất báo cáo HTML", 0.92, status="running", step_id="export")
     logger.info("[L4] Xuất báo cáo HTML")
     profile_fragment = _write_single_ydata_profile(df, out, minimal=profiling_minimal)
+    # Phase 3: Build data samples (5 rows) for each table tab
+    from reporting.html_merger import _build_data_sample_html as _sample_html
+    _tbl_stem = Path(str(data_path)).stem
+    _data_samples = {_tbl_stem: _sample_html(df, _tbl_stem)}
+
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
         profile_fragment,
         guardrail_status=guardrail_report.status,
         model_info=guardrail_report.provider,
-        all_table_names=[Path(str(data_path)).stem],
+        all_table_names=[_tbl_stem],
         out_dir=str(out),
         findings=findings,
+        table_data_samples=_data_samples,
     )
     dq_path.write_text(findings.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
@@ -752,7 +790,12 @@ def run_multi(
     logger.info("[L2C] Graph Engine: dựng đồ thị quan hệ")
     schema_gate = apply_schema_gate(schema, cross_tables, confirmed_schema_path, fact_table)
     gated_schema = schema.model_copy(update={"relationships": schema_gate.relationships})
-    graph_result = reconstruct_graph(cross_tables, gated_schema)
+    graph_result = reconstruct_graph(
+        cross_tables,
+        gated_schema,
+        composite_pk_tables=_get_composite_pk_tables(schema_path),
+    )
+
     graph_relationships = accepted_relationships_from_graph(schema_gate.relationships, graph_result)
     bus.emit(
         "🔑 Kiểm tra toàn vẹn FK/PK (Schema Gate)",
@@ -843,6 +886,13 @@ def run_multi(
         _write_multi_ydata_profiles(cross_tables, out, minimal=profiling_minimal)
         + _cross_table_correlation_fragment(cross_table_analysis)
     )
+    # Phase 3: Build data samples (5 rows) for each table tab
+    from reporting.html_merger import _build_data_sample_html as _sample_html_mt
+    _data_samples_mt = {
+        tbl: _sample_html_mt(tbl_df, tbl)
+        for tbl, tbl_df in cross_tables.items()
+    }
+
     smart_html = merge_to_tabbed_html(
         multi_agent_result,
         verdict,
@@ -852,6 +902,7 @@ def run_multi(
         all_table_names=list(cross_tables.keys()),
         out_dir=str(out),
         findings=combined_findings,
+        table_data_samples=_data_samples_mt,
     )
     dq_path.write_text(
         json.dumps(

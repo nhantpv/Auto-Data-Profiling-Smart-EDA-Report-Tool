@@ -294,6 +294,7 @@ class ColumnIssue(BaseModel):
     """1 issue của 1 cột — Analyst agent trả về trong JSON."""
     column_name: str
     severity: str                              # "CRITICAL" | "HIGH" | "WARN"
+    issue_type: Optional[str] = None           # Loại issue cụ thể nếu biết (PK_DUPLICATE, MISSINGNESS, ...)
     problem: str                               # Mô tả vấn đề + số liệu
     ml_consequence: str                        # Ảnh hưởng đến nhóm thuật toán
     suggested_action: str                      # Gợi ý tham khảo (advisory tone)

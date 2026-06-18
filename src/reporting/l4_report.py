@@ -336,6 +336,7 @@ def _build_deterministic_table_result(table_cluster: TableCluster) -> AnalystTab
             column_issues.append(ColumnIssue(
                 column_name=col_name,
                 severity=severity,
+                issue_type=issue_type,
                 problem=(
                     f"{issue_type}: {issue.get('description', 'Phát hiện vấn đề')}. "
                     f"Ảnh hưởng: {affected_count} dòng{pct_str}."
@@ -763,7 +764,62 @@ def render_table_result_html(
                     f'<p class="evidence-ref"><small>Evidence: '
                     f'<code>{html.escape(issue.evidence_ref)}</code></small></p>'
                 )
+            # SQL diagnostic snippet — 3-tier issue_type resolution
+            _KNOWN_TYPES = {
+                "PK_DUPLICATE", "COMPOSITE_PK_DUPLICATE", "PK_NULL", "DUPLICATE",
+                "ORPHAN_FOREIGN_KEY", "NON_UNIQUE_PARENT_PK", "MISSINGNESS",
+                "NOT_NULL_VIOLATION", "UNIQUE_VIOLATION", "HIGH_CARDINALITY",
+                "CONSTANT_COLUMN", "TYPE_MISMATCH", "INCONSISTENT_FORMAT",
+            }
+            # Tier 1: explicit issue_type field (deterministic builder)
+            _raw_issue_type = getattr(issue, "issue_type", None) or "UNKNOWN"
+            if _raw_issue_type.upper() not in _KNOWN_TYPES:
+                _raw_issue_type = "UNKNOWN"
+            else:
+                _raw_issue_type = _raw_issue_type.upper()
+
+            # Tier 2: parse "ISSUE_TYPE: description" prefix if still unknown
+            if _raw_issue_type == "UNKNOWN" and ":" in issue.problem:
+                _candidate = issue.problem.split(":", 1)[0].strip().upper()
+                if _candidate in _KNOWN_TYPES:
+                    _raw_issue_type = _candidate
+
+            # Tier 3: keyword heuristic from problem text (for LLM-generated Vietnamese text)
+            if _raw_issue_type == "UNKNOWN":
+                _prob_lower = issue.problem.lower()
+                # Check duplicate/trùng first since those texts also contain "%"
+                if any(k in _prob_lower for k in ["trùng", "duplicate", "lặp", "dòng đặc biệt", "dòng dùng bẫy"]):
+                    _raw_issue_type = "DUPLICATE"
+                elif any(k in _prob_lower for k in ["unique", "duy nhất", "uniform"]):
+                    _raw_issue_type = "UNIQUE_VIOLATION"
+                elif any(k in _prob_lower for k in ["giá trị null", "giá trị thiếu", "missing", "null", "thiếu"]):
+                    _raw_issue_type = "MISSINGNESS"
+                elif any(k in _prob_lower for k in ["cardinality", "distinct", "đa dạng"]):
+                    _raw_issue_type = "HIGH_CARDINALITY"
+                elif any(k in _prob_lower for k in ["kiểu dữ liệu", "type mismatch", "định dạng sai", "type"]):
+                    _raw_issue_type = "TYPE_MISMATCH"
+
+            if _raw_issue_type != "UNKNOWN":
+                try:
+                    from reporting.sql_fix_generator import generate_sql_for_issue
+                    _sql = generate_sql_for_issue(
+                        issue_type=_raw_issue_type,
+                        table_name=result.table_name,
+                        column_name=_display_col(issue.column_name),
+                        prefer_llm=False,  # template fallback for speed; LLM can opt-in separately
+                    )
+                    parts.append(
+                        '<details class="sql-snippet-details">'
+                        '<summary>🔍 SQL chẩn đoán</summary>'
+                        '<div class="sql-snippet-body">'
+                        f'<pre><code>{html.escape(_sql)}</code></pre>'
+                        '</div></details>'
+                    )
+                except Exception:
+                    pass  # SQL generation is non-critical
             parts.append('</div>')
+
+
 
     parts.append('</div>')
     return "\n".join(parts)
