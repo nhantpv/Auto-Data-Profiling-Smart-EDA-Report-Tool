@@ -1237,11 +1237,76 @@ def _table_tab_panel(
     )
 
 
+def _missingness_diagnostic_table(findings: object) -> str:
+    """Render bảng tổng hợp MCAR/MAR/INDETERMINATE cho toàn bộ cột có missing.
+
+    Hiển thị kể cả cột dưới anomaly threshold — cài mà badge inline không có.
+    Return empty string nếu không có cột nào có mechanism được phân loại.
+    """
+    if findings is None:
+        return ""
+    columns = getattr(findings, "columns", {}) or {}
+    rows = []
+    for name, stats in columns.items():
+        mechanism = getattr(stats, "missingness_mechanism", None)
+        p_missing = getattr(stats, "p_missing", None)
+        if mechanism is None or not p_missing or p_missing <= 0:
+            continue
+        # Display name: strip table prefix for single-table mode
+        display_name = name.split(".", 1)[1] if "." in name else name
+        _MECH_INFO = {
+            "MAR": (
+                "cstat-mar",
+                "MAR ⚠️",
+                "Missing At Random — pattern có thể dự đoán từ cột khác. Dùng conditional impute.",
+            ),
+            "MCAR_CONSISTENT": (
+                "cstat-mcar",
+                "MCAR ✅",
+                "Missing Completely At Random — ngẫu nhiên thực sự. Impute mean/median an toàn.",
+            ),
+            "INDETERMINATE": (
+                "cstat-indet",
+                "INDET. ?",
+                "Quá ít giá trị thiếu để xác định cơ chế. Kiểm tra lại khi có thêm dữ liệu.",
+            ),
+        }
+        css_cls, badge_label, action_text = _MECH_INFO.get(
+            mechanism, ("cstat-indet", html.escape(mechanism), "")
+        )
+        rows.append(
+            f'<tr>'
+            f'<td><code>{html.escape(display_name)}</code></td>'
+            f'<td class="number-cell">{p_missing * 100:.1f}%</td>'
+            f'<td><span class="cstat-pill {css_cls}">{badge_label}</span></td>'
+            f'<td class="rationale-cell">{html.escape(action_text)}</td>'
+            f'</tr>'
+        )
+    if not rows:
+        return ""
+    header = (
+        '<section class="ai-section" style="margin-top:20px">'
+        '<div class="section-heading">'
+        '<p class="eyebrow">Phân Tích Missing Value</p>'
+        '<h2>Missingness Diagnostic — Cơ Chế Thiếu Dữ Liệu</h2>'
+        '</div>'
+        '<div class="table-scroll-wrapper" style="margin-top:12px">'
+        '<table class="issue-spotlight-table">'
+        '<thead><tr>'
+        '<th>Cột</th><th>% Thiếu</th><th>Cơ chế</th><th>Hành động khuyến nghị</th>'
+        '</tr></thead>'
+        '<tbody>'
+    )
+    footer = '</tbody></table></div></section>'
+    return header + "".join(rows) + footer
+
+
 def _overview_tab_panel(
     result: MultiAgentResult,
     verdict: DatasetVerdict,
     profile_fragment: str,
     is_active: bool = True,
+    findings: object = None,
 ) -> str:
     """Tab Tổng quan: verdict brief + issue table + executive summary + cross-table.
 
@@ -1253,7 +1318,12 @@ def _overview_tab_panel(
     # 1. Science brief (verdict headline + score counts)
     sections.append(_science_brief(verdict))
 
-    # 2. Issue spotlight — dạng bảng (Bảng|Đột|Loại|Mức độ|Dòng bị ảnh hưởng)
+    # 2. Missingness Diagnostic table — hiển thị toàn bộ cột có missing (kể cả dưới threshold)
+    miss_table = _missingness_diagnostic_table(findings)
+    if miss_table:
+        sections.append(miss_table)
+
+    # 3. Issue spotlight — dạng bảng (Bảng|Đột|Loại|Mức độ|Dòng bị ảnh hưởng)
     sections.append(_issue_spotlight(verdict))
 
     # 3. Executive summary + Feature usability từ Editor
@@ -1426,6 +1496,190 @@ def _agent_content(result: MultiAgentResult, verdict: DatasetVerdict) -> str:
     return "\n".join(sections) if sections else "<p>Không có phần phân tích AI nào được tạo ra.</p>"
 
 
+def _build_user_guide_html() -> str:
+    """Render tab Hướng dẫn sử dụng — nội dung tĩnh, không cần data runtime."""
+    return """
+<div class="table-health-section" style="max-width:900px;margin:0 auto;">
+
+  <div class="section-heading" style="margin-bottom:24px;">
+    <p class="eyebrow">Tài liệu hệ thống</p>
+    <h2>📖 Hướng Dẫn Đọc Report Smart EDA</h2>
+  </div>
+
+  <!-- Quy ước severity -->
+  <section class="ai-section" style="margin-bottom:28px;">
+    <div class="section-heading">
+      <h3 style="margin:0 0 12px;">⚡ Quy Ước Mức Độ Nghiêm Trọng</h3>
+    </div>
+    <div class="table-scroll-wrapper">
+    <table class="issue-spotlight-table">
+      <thead><tr>
+        <th>Mức</th><th>Ý nghĩa</th><th>Điều kiện kích hoạt</th><th>Hành động khuyến nghị</th>
+      </tr></thead>
+      <tbody>
+        <tr class="severity-row-critical">
+          <td><span class="badge-critical">CRITICAL</span></td>
+          <td>Dữ liệu không thể dùng cho phân tích</td>
+          <td>Thiếu &gt;60% giá trị, trùng lặp &gt;80%, vi phạm FK nghiêm trọng</td>
+          <td>Dừng pipeline, yêu cầu thu thập lại dữ liệu nguồn</td>
+        </tr>
+        <tr class="severity-row-high">
+          <td><span class="badge-high">HIGH</span></td>
+          <td>Vấn đề nghiêm trọng ảnh hưởng độ chính xác</td>
+          <td>Thiếu 30–60%, outlier &gt;10%, type mismatch, cardinality bất thường</td>
+          <td>Xử lý trước khi đưa vào model ML hoặc báo cáo chính thức</td>
+        </tr>
+        <tr class="severity-row-warn">
+          <td><span class="badge-warn">WARN</span></td>
+          <td>Cần chú ý, có thể ảnh hưởng kết quả</td>
+          <td>Thiếu 5–30%, phân phối lệch cao, giá trị ngoại lệ nhẹ</td>
+          <td>Đánh giá context, quyết định có cần xử lý không</td>
+        </tr>
+        <tr class="severity-row-info">
+          <td><span class="badge-info">INFO</span></td>
+          <td>Quan sát tham khảo, không phải lỗi</td>
+          <td>Thiếu &lt;5%, distinct count thấp, zero count cao</td>
+          <td>Ghi nhận, không cần hành động khẩn cấp</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- Missingness mechanism -->
+  <section class="ai-section" style="margin-bottom:28px;">
+    <div class="section-heading">
+      <h3 style="margin:0 0 12px;">🔍 Cơ Chế Thiếu Dữ Liệu (Missingness Mechanism)</h3>
+    </div>
+    <p style="color:var(--text-secondary);font-size:14px;margin:0 0 12px;">
+      Hệ thống phân loại pattern thiếu dữ liệu bằng thuật toán phân loại nhị phân (AUC-based).
+      Kết quả giúp chọn chiến lược imputation phù hợp.
+    </p>
+    <div class="table-scroll-wrapper">
+    <table class="issue-spotlight-table">
+      <thead><tr>
+        <th>Cơ chế</th><th>Ý nghĩa</th><th>Cách xác định</th><th>Chiến lược Imputation</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="cstat-pill cstat-mar">MAR ⚠️</span></td>
+          <td><strong>Missing At Random</strong> — pattern thiếu có thể dự đoán từ cột khác</td>
+          <td>Classifier AUC cao (&gt;0.65): biết cột bị thiếu hay không từ các cột khác</td>
+          <td>⚠️ KHÔNG dùng mean/median blind. Dùng conditional impute theo nhóm hoặc model-based (KNN, MICE)</td>
+        </tr>
+        <tr>
+          <td><span class="cstat-pill cstat-mcar">MCAR ✅</span></td>
+          <td><strong>Missing Completely At Random</strong> — hoàn toàn ngẫu nhiên</td>
+          <td>Classifier AUC thấp (≈0.5): không có pattern nào dự đoán được</td>
+          <td>✅ An toàn khi dùng mean/median hoặc mode. Listwise deletion ít ảnh hưởng bias</td>
+        </tr>
+        <tr>
+          <td><span class="cstat-pill cstat-indet">INDET. ?</span></td>
+          <td><strong>Indeterminate</strong> — quá ít giá trị thiếu để xác định</td>
+          <td>Số lượng missing &lt; ngưỡng tối thiểu để train classifier đáng tin</td>
+          <td>Xử lý thận trọng như MAR, kiểm tra lại khi có thêm dữ liệu</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- Loại lỗi phổ biến -->
+  <section class="ai-section" style="margin-bottom:28px;">
+    <div class="section-heading">
+      <h3 style="margin:0 0 12px;">📋 Danh Mục Vấn Đề Hệ Thống Phát Hiện</h3>
+    </div>
+    <div class="table-scroll-wrapper">
+    <table class="issue-spotlight-table">
+      <thead><tr>
+        <th>Loại vấn đề</th><th>Cách phát hiện</th><th>Ảnh hưởng phân tích</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td><code>HIGH_MISSING_RATE</code></td>
+          <td>% giá trị null vượt ngưỡng (mặc định 30%)</td>
+          <td>Bias trong model, kết quả thống kê không đại diện</td>
+        </tr>
+        <tr>
+          <td><code>HIGH_CARDINALITY</code></td>
+          <td>Số giá trị distinct quá cao so với n_rows (thường &gt;50%)</td>
+          <td>One-hot encoding không hiệu quả, có thể là ID column bị nhầm</td>
+        </tr>
+        <tr>
+          <td><code>LOW_VARIANCE / CONSTANT</code></td>
+          <td>Std ≈ 0 hoặc chỉ có 1 giá trị duy nhất</td>
+          <td>Feature vô dụng trong ML, cần loại bỏ</td>
+        </tr>
+        <tr>
+          <td><code>OUTLIER_RATE_HIGH</code></td>
+          <td>PyOD ensemble (IForest + LOF + CBLOF) detect điểm bất thường</td>
+          <td>Skew distribution, ảnh hưởng mean/std, model bị kéo lệch</td>
+        </tr>
+        <tr>
+          <td><code>SKEWNESS_HIGH</code></td>
+          <td>|skewness| &gt; 2 hoặc |kurtosis| &gt; 7</td>
+          <td>Cần log-transform hoặc box-cox trước khi đưa vào linear model</td>
+        </tr>
+        <tr>
+          <td><code>DUPLICATE_ROWS</code></td>
+          <td>Hash toàn bộ row, đếm duplicate &gt; ngưỡng</td>
+          <td>Overfit, bias trong tập train nếu không loại trước split</td>
+        </tr>
+        <tr>
+          <td><code>TYPE_MISMATCH</code></td>
+          <td>Schema DBML/SQL khai báo type khác với type thực tế suy ra</td>
+          <td>Silent error trong pipeline downstream, parse fail ở production</td>
+        </tr>
+        <tr>
+          <td><code>FK_INTEGRITY_VIOLATION</code></td>
+          <td>Foreign key không match giữa bảng con và bảng cha</td>
+          <td>JOIN trả về NULL rows, aggregation sai, report thiếu dữ liệu</td>
+        </tr>
+        <tr>
+          <td><code>PATTERN_ANOMALY</code></td>
+          <td>Regex/format check (email, phone, date) — tỉ lệ fail cao</td>
+          <td>Dữ liệu thô cần normalize/validate trước downstream</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <!-- Cách đọc report -->
+  <section class="ai-section">
+    <div class="section-heading">
+      <h3 style="margin:0 0 12px;">🗂️ Cách Điều Hướng Report</h3>
+    </div>
+    <div class="stats-diagnostic-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;">
+      <div style="padding:16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-soft);">
+        <strong>Tổng Quan</strong>
+        <p style="margin:8px 0 0;color:var(--text-secondary);font-size:13px;">
+          Verdict tổng thể, bảng Missingness Diagnostic, bảng Issue Spotlight, tóm tắt điều hành từ AI, biểu đồ quan hệ liên bảng.
+        </p>
+      </div>
+      <div style="padding:16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-soft);">
+        <strong>Tab Bảng (Tên dataset)</strong>
+        <p style="margin:8px 0 0;color:var(--text-secondary);font-size:13px;">
+          Chi tiết từng vấn đề theo cột, badge MAR/MCAR/INDET inline, biểu đồ phân phối, thống kê YData nhúng.
+        </p>
+      </div>
+      <div style="padding:16px;border:1px solid var(--border-subtle);border-radius:var(--radius);background:var(--brand-soft);">
+        <strong>📖 Hướng dẫn (tab này)</strong>
+        <p style="margin:8px 0 0;color:var(--text-secondary);font-size:13px;">
+          Giải thích quy ước mức độ, cơ chế missingness, danh mục lỗi, và cách điều hướng report.
+        </p>
+      </div>
+    </div>
+    <p style="margin:18px 0 0;color:var(--text-muted);font-size:12px;">
+      Smart EDA Report — tự động bởi pipeline AI đa tầng (YData Profiling → PyOD Anomaly → Severity Calibration → LLM Editor).
+      Guardrail tự động đánh giá độ tin cậy của phần phân tích AI.
+    </p>
+  </section>
+
+</div>
+"""
+
+
 def merge_to_tabbed_html(
     multi_agent_result: MultiAgentResult,
     verdict: DatasetVerdict,
@@ -1436,6 +1690,7 @@ def merge_to_tabbed_html(
     findings_columns: dict | None = None,
     all_table_names: list[str] | None = None,
     out_dir: str | None = None,
+    findings: object = None,
 ) -> str:
     """Ghép tất cả thành 1 file HTML với dynamic tabs.
 
@@ -1489,7 +1744,7 @@ def merge_to_tabbed_html(
         '</button>'
     )
     tab_panels_parts.append(
-        _overview_tab_panel(multi_agent_result, verdict, ydata_html, is_active=True)
+        _overview_tab_panel(multi_agent_result, verdict, ydata_html, is_active=True, findings=findings)
     )
 
     # Tab cho từng bảng
@@ -1604,6 +1859,20 @@ def merge_to_tabbed_html(
             + _agent_content(multi_agent_result, verdict)
             + '</section>'
         )
+
+    # ── Tab Hướng dẫn sử dụng (luôn là tab cuối cùng) ──
+    tab_buttons_parts.append(
+        '<button id="tab-button-guide" class="tab" type="button" '
+        'role="tab" aria-selected="false" aria-controls="tab-guide" data-tab="guide">'
+        '<span>\U0001f4d6 H\u01b0\u1edbng d\u1eabn</span><small>C\u00e1ch \u0111\u1ecdc report</small>'
+        '</button>'
+    )
+    tab_panels_parts.append(
+        '<section id="tab-guide" class="tab-content" role="tabpanel" '
+        'aria-labelledby="tab-button-guide" hidden>'
+        + _build_user_guide_html()
+        + '</section>'
+    )
 
     assembled = template.format(
         verdict_class=html.escape(verdict_value),

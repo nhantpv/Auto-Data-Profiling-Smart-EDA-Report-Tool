@@ -501,6 +501,20 @@ async def _run_structured_editor(
                 name: stats.model_dump(exclude_none=True)
                 for name, stats in findings.columns.items()
             }
+            # Extract per-column missingness analysis for LLM (C3)
+            _miss_analysis = [
+                {
+                    "column": name,
+                    "p_missing": round(stats.p_missing, 4),
+                    "mechanism": stats.missingness_mechanism,
+                    "predictability": "high" if stats.missingness_mechanism == "MAR" else "random",
+                }
+                for name, stats in findings.columns.items()
+                if stats.p_missing and stats.p_missing > 0.01
+                and stats.missingness_mechanism is not None
+            ][:20]
+            if _miss_analysis:
+                payload["missingness_analysis"] = _miss_analysis
         if schema_gate:
             payload["schema_mode"] = schema_gate.mode
         if schema and schema.relationships:
@@ -531,6 +545,20 @@ async def _run_structured_editor(
             for iss in (verdict.top_issues or [])[:15]
         ]
 
+        _miss_instruction = ""
+        if payload.get("missingness_analysis"):
+            _miss_instruction = (
+                "\n\n# Yêu cầu phân tích Missingness (Layer 2.5a):\n"
+                "Với mỗi cột có mechanism='MAR' trong missingness_analysis: "
+                "(1) Lý giải tại sao MAR gợi ý data collection bias hoặc selection effect "
+                "(predictability=high nghĩa là pattern thiếu có thể dự đoán từ cột khác). "
+                "(2) Phỏng đoán business logic cụ thể — tại sao nhóm người dùng hoặc điều kiện nào "
+                "khiến cột này hay bị bỏ trống. "
+                "(3) Khuyến nghị imputation strategy phù hợp: KHÔNG dùng mean/median blind — "
+                "cần conditional impute theo nhóm hoặc model-based imputation. "
+                "Với cột MCAR_CONSISTENT: xác nhận impute mean/median là an toàn. "
+                "Với cột INDETERMINATE: ghi nhận không đủ dữ liệu để xác định cơ chế."
+            )
         prompt = (
             "Hãy viết báo cáo chất lượng dữ liệu đầy đủ dưới dạng JSON có cấu trúc. "
             "executive_summary phải tối thiểu 8 câu, bao gồm: tổng quan dataset, các vấn đề nghiêm trọng "
@@ -543,6 +571,7 @@ async def _run_structured_editor(
             f"{json.dumps(table_summaries, ensure_ascii=False, indent=2)}"
             f"\n\n# Top issues (context bổ sung):\n"
             f"{json.dumps(top_issues_summary, ensure_ascii=False, indent=2)}"
+            f"{_miss_instruction}"
         )
         for attempt in range(1, 4):
             try:
@@ -649,6 +678,17 @@ def render_table_result_html(
         n_zeros = getattr(stats, "n_zeros", None)
         if n_zeros is not None:
             items.append(f"<span class='cstat-pill'>Zeros: {n_zeros}</span>")
+        # Missingness mechanism badge (MAR / MCAR / INDETERMINATE)
+        mechanism = getattr(stats, "missingness_mechanism", None)
+        p_miss_val = getattr(stats, "p_missing", None)
+        if mechanism and p_miss_val and p_miss_val > 0:
+            _MECH_CLASSES = {
+                "MAR": ("cstat-mar", "MAR ⚠️"),
+                "MCAR_CONSISTENT": ("cstat-mcar", "MCAR ✅"),
+                "INDETERMINATE": ("cstat-indet", "INDET. ?"),
+            }
+            css_cls, label = _MECH_CLASSES.get(mechanism, ("cstat-indet", mechanism))
+            items.append(f"<span class='cstat-pill {css_cls}'>{html.escape(label)}</span>")
         if not items:
             return ""
         return f'<div class="col-stats-row">{" ".join(items)}</div>'

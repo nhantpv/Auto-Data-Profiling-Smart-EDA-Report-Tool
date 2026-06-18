@@ -632,6 +632,7 @@ def run(
         model_info=guardrail_report.provider,
         all_table_names=[Path(str(data_path)).stem],
         out_dir=str(out),
+        findings=findings,
     )
     dq_path.write_text(findings.model_dump_json(indent=2), encoding="utf-8")
     verdict_path.write_text(verdict.model_dump_json(indent=2), encoding="utf-8")
@@ -850,6 +851,7 @@ def run_multi(
         model_info=guardrail_report.provider,
         all_table_names=list(cross_tables.keys()),
         out_dir=str(out),
+        findings=combined_findings,
     )
     dq_path.write_text(
         json.dumps(

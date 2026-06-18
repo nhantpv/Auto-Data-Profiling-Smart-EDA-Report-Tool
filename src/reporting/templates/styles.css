@@ -2186,6 +2186,34 @@ tr:last-child td {
   color: var(--warn);
 }
 
+/* Missingness mechanism badges */
+.cstat-mar {
+  border-color: rgba(194, 65, 12, 0.35);
+  background: #fff7ed;
+  color: #c2410c;
+  font-weight: 800;
+}
+
+.cstat-mcar {
+  border-color: rgba(21, 128, 61, 0.28);
+  background: #f0fdf4;
+  color: #15803d;
+  font-weight: 800;
+}
+
+.cstat-indet {
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cstat-mar  { background: #3a1a08; color: #fb923c; border-color: rgba(251,146,60,.3); }
+  .cstat-mcar { background: #052e16; color: #4ade80; border-color: rgba(74,222,128,.25); }
+  .cstat-indet { background: var(--surface-inset); }
+}
+
 /* ── Feature usability table ── */
 .feature-usability-note,
 .fix-priority-note {
