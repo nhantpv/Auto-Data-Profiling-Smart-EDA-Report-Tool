@@ -766,9 +766,10 @@ async def _run_structured_editor(
 # ============================================================
 
 def render_table_result_html(
-    result: AnalystTableResult,
+    result: object,
     chart_paths: dict[str, str] | None = None,
     col_stats: dict | None = None,
+    outlier_html: str = "",
 ) -> str:
     """Python Renderer: chuyển AnalystTableResult JSON → HTML đẹp.
 
@@ -779,14 +780,14 @@ def render_table_result_html(
         result: AnalystTableResult từ LLM/deterministic agent
         chart_paths: dict {chart_key → path} cho bảng này (đã bỏ prefix bảng)
         col_stats: dict {col_name → ColumnStats} thống kê inline cho bảng này
+        outlier_html: HTML chẩn đoán outlier (nếu có)
     """
     chart_paths = chart_paths or {}
     col_stats = col_stats or {}
 
     # Chart keys thuộc cấp bảng (không phải cột)
     _TABLE_LEVEL_CHARTS = {
-        "missingness_bar", "dtype_distribution", "numeric_boxplot",
-        "correlation_heatmap", "stacked_bar_issues",
+        "missingness_bar", "dtype_distribution", "correlation_heatmap", "stacked_bar_issues",
     }
     # Chart keys thuộc cấp cột (prefix là tên cột)
     _COLUMN_LEVEL_CHARTS = {"numeric_distributions", "categorical_top_values"}
@@ -854,6 +855,10 @@ def render_table_result_html(
             table_chart_html.append(_chart_img(path, label, desc))
     if table_chart_html:
         parts.append('<div class="table-chart-row">' + "".join(table_chart_html) + '</div>')
+
+    # Inject Outlier Diagnostic section immediately after the table overview/description
+    if outlier_html:
+        parts.append(outlier_html)
 
     def _display_col(col_name: str) -> str:
         """Strip table prefix for display: 'table.col' -> 'col'."""

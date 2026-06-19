@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart EDA / VSF-EDA (v5.4) Architecture</title>
+    <title>Sơ đồ Kiến trúc Hệ thống Smart EDA</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -50,8 +50,6 @@
             border: 1px solid rgba(0,0,0,0.2);
         }
         .done { background-color: #d4edda; border-color: #28a745; }
-        .wip { background-color: #fff3cd; border-color: #ffc107; }
-        .planned { background-color: #cce5ff; border-color: #0d6efd; }
         .gate { background-color: #f8d7da; border-color: #dc3545; }
         .footer {
             text-align: center;
@@ -65,70 +63,69 @@
 </head>
 <body>
 
-    <h1>🧠 Sơ đồ Kiến trúc Hệ thống Smart EDA (v5.4)</h1>
+    <h1>🧠 Sơ đồ Kiến trúc Hệ thống Smart EDA</h1>
     
     <div class="legend">
-        <div class="legend-item"><div class="color-box done"></div> Đã hoàn thành (Done)</div>
-        <div class="legend-item"><div class="color-box wip"></div> Đang phát triển (WIP)</div>
-        <div class="legend-item"><div class="color-box planned"></div> Kế hoạch (Planned)</div>
-        <div class="legend-item"><div class="color-box gate"></div> Cổng kiểm duyệt (Human Gate)</div>
+        <div class="legend-item"><div class="color-box done"></div> Khối Chức năng Cốt lõi (Core Component)</div>
+        <div class="legend-item"><div class="color-box gate"></div> Cổng kiểm duyệt / Đầu ra (Gate/Output)</div>
     </div>
 
     <div class="mermaid-container">
         <div class="mermaid">
         flowchart TD
             classDef done fill:#d4edda,stroke:#28a745,color:#000,stroke-width:2px
-            classDef wip fill:#fff3cd,stroke:#ffc107,color:#000,stroke-width:2px
-            classDef planned fill:#cce5ff,stroke:#0d6efd,color:#000,stroke-width:2px
             classDef gate fill:#f8d7da,stroke:#dc3545,color:#000,stroke-width:2px
 
-            SRC["📂 DATA SOURCES<br/>CSV · XLSX · Parquet · JSON · DB · DBML/SQL"]:::done
+            SRC["📂 DATA SOURCES<br/>CSV · XLSX · Parquet · JSON · DBML/SQL"]:::done
 
-            L0["L0 INGESTION<br/>readers · encoding fallback · DB→DBML+CSV<br/>🔒 no-sampling"]:::done
+            L0["L0 INGESTION<br/>csv_reader · registry · sampling"]:::done
 
-            L1["L1 PROFILING<br/>ydata-profiling Full Mode<br/>single-table + multi-table"]:::wip
+            L1["L1 PROFILING<br/>ydata-profiling (univariate stats)"]:::done
 
-            L2a["L2a ANOMALY<br/>IForest + ECOD + LOF<br/>MAX combiner · z ≥ 3.0"]:::done
+            L2a["L2a ANOMALY<br/>PyOD Ensemble (IForest, ECOD, LOF)"]:::done
 
-            L2b["L2b SCHEMA single-table<br/>validate PK/FK/type/unique/not_null + infer<br/>value-coverage · NO Jaccard · NO LLM"]:::done
+            L2b["L2b SCHEMA<br/>Type, PK/FK Integrity Check"]:::done
 
-            L2b5{"L2b.5 HUMAN-IN-THE-LOOP GATE<br/>Quick Mode: auto → inferred<br/>Precise Mode: UI → confirmed<br/>+ Chọn Fact Table"}:::gate
+            L2c["L2c CROSS-TABLE<br/>Multicollinearity & Data Leakage"]:::done
+            
+            L2d["L2d GRAPH ENGINE<br/>Schema Relationship Network Graph"]:::done
 
-            L2c["L2c GRAPH RECONSTRUCTION<br/>Schema Graph · JOIN_CARDINALITY<br/>Fact/Dim detection · Fan-out flag<br/>Parent PK runtime check"]:::wip
+            L25["L2.5 SEVERITY STACK<br/>(1) Missingness MCAR/MAR/MNAR<br/>(2) Calibrator Thresholds<br/>(3) Compound Escalator<br/>(4) Aggregator Verdict"]:::done
 
-            L25["L2.5 SEVERITY STACK<br/>(a) Missingness per-column<br/>(b) Calibrator<br/>(c) Compound<br/>(d) Disposition<br/>(e) Aggregator → VERDICT"]:::wip
+            L3["L3 ONTOLOGY & JSON SSOT<br/>Data Models (Pydantic)<br/>data_quality_findings.json<br/>schema_evaluation_findings.json"]:::done
 
-            L3["L3 FINDING REGISTRY → SSOT<br/>data_quality_findings.json<br/>schema_evaluation_findings.json<br/>dataset_verdict.json"]:::done
+            L35["L3.5 VISUALIZER<br/>PNG Charts (Diagnostic 3-Tier Layout)"]:::done
 
-            L3b["L3b CROSS-TABLE CORRELATION<br/>Phase 1: LLM Planner<br/>Phase 2: Deterministic compute<br/>Phase 3: LLM Evaluator · L4"]:::done
+            L4["L4 REPORTING (MULTI-AGENT)<br/>Dispatcher → Analyst Agents → Editor Agent<br/>Output: l4_report.md"]:::done
 
-            L35["L3.5 OUTPUT<br/>ydata HTML · Charts PNG<br/>ArtifactManifest"]:::done
+            L4G{"L4 GUARDRAIL<br/>narrative.py<br/>Text Guardrail & Structured JSON Guardrail"}:::gate
 
-            L4["L4 MULTI-AGENT NARRATIVE<br/>Dispatcher → N×Analyst (mini) → Editor (strong)<br/>Guardrail per-agent · Retry 3×<br/>fail → fallback deterministic"]:::done
-
-            OUT["📦 2-TIER OUTPUT<br/>Tầng 1: smart_eda_report.html<br/>(Tabbed: AI Analysis + ydata Stats)<br/>Tầng 2: Raw JSON + PNG"]:::done
+            OUT["📦 FINAL OUTPUT<br/>HTML Merger (Templates)<br/>report.html"]:::gate
 
             SRC --> L0
             L0 --> L1
             L0 --> L2a
             L0 --> L2b
+            L2b --> L2c
+            L2b --> L2d
             L1 --> L25
             L2a --> L25
-            L2b -->|"single-table"| L25
-            L2b -->|"multi-table N≥2"| L2b5
-            L2b5 -->|"ConfirmedSchema"| L2c
+            L2b --> L25
             L2c --> L25
+            L2d --> L25
             L25 --> L3
-            L3 --> L3b
             L3 --> L35
-            L3b --> L35
-            L35 --> L4
-            L4 --> OUT
+            L3 --> L4
+            L4 --> L4G
+            L4G -->|"Pass"| OUT
+            L4G -->|"Fail/Hallucination"| L4
+            L35 --> OUT
+            L3 --> OUT
         </div>
     </div>
 
     <div class="footer">
-        Được tạo tự động từ bản thiết kế gốc (ARCHITECT.md). Thiết kế tập trung vào tính toàn vẹn hệ thống và Data Contracts.
+        Được tạo tự động. Thiết kế theo nguyên lý "Deterministic-First, LLM-Last".
     </div>
 
     <!-- Nạp thư viện Mermaid -->

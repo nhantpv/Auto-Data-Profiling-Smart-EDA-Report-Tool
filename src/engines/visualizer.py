@@ -286,6 +286,55 @@ def draw_diagnostic_scatter(
     return file_name
 
 
+def draw_anomaly_score_bar(
+    anomaly_result: dict,
+    out_dir: str,
+    artifact_prefix: str | None = None,
+) -> Optional[str]:
+    """Draw a bar chart of top 100 anomaly scores for outliers."""
+    if anomaly_result.get("skipped", True) or anomaly_result.get("n_outliers", 0) == 0:
+        return None
+
+    # We want to plot the top scores.
+    # anomaly_result has "anomaly_scores", "outlier_positions", "outlier_indices"
+    scores = anomaly_result.get("anomaly_scores", [])
+    positions = anomaly_result.get("outlier_positions", [])
+    indices = anomaly_result.get("outlier_indices", [])
+    
+    if not scores:
+        return None
+
+    # Plot top 50 or so outliers to make the bar chart readable
+    top_n = min(50, len(scores))
+    top_scores = scores[:top_n]
+    top_indices = [str(idx) for idx in indices[:top_n]]
+
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    prefix = f"{_safe_name(artifact_prefix)}__" if artifact_prefix else ""
+    file_name = f"{prefix}outlier_score_bar.png"
+    out_path = Path(out_dir) / file_name
+
+    fig, ax = plt.subplots(figsize=(10, max(4.2, len(top_scores) * 0.2)))
+    
+    # Reverse to have highest score at the top
+    y_pos = np.arange(len(top_indices))[::-1]
+    
+    ax.barh(y_pos, top_scores, align='center', color="#d93025", alpha=0.8)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(top_indices)
+    
+    ax.set_xlabel("Anomaly Score (Ensemble Z-Score Probability)")
+    ax.set_ylabel("Row Index")
+    ax.set_title(f"Top {top_n} Outlier Scores")
+    
+    ax.grid(axis='x', linestyle='--', alpha=0.6)
+    
+    fig.savefig(out_path, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Outlier score bar chart saved: %s", out_path)
+    return file_name
+
+
 def attach_diagnostic_charts(
     findings,
     df: pd.DataFrame,
@@ -293,13 +342,33 @@ def attach_diagnostic_charts(
     out_dir: str,
     artifact_prefix: str | None = None,
 ):
-    """Fill diagnostic_chart for OUTLIER_ENSEMBLE records. Mutates findings in place."""
-    chart = draw_diagnostic_scatter(df, anomaly_result, out_dir, artifact_prefix=artifact_prefix)
-    if chart is None:
+    """Fill diagnostic_chart for OUTLIER_ENSEMBLE records. Mutates findings in place.
+
+    Đồng thời inject chart path vào dataset_meta.overview_charts với key
+    "outlier_score_bar" để _table_charts_for() tự lọc và hiển thị trong tab bảng.
+    """
+    chart_score = draw_anomaly_score_bar(anomaly_result, out_dir, artifact_prefix=artifact_prefix)
+    chart_scatter = draw_diagnostic_scatter(df, anomaly_result, out_dir, artifact_prefix=artifact_prefix)
+    
+    if not chart_score and not chart_scatter:
         return findings
+
+    # Dùng scatter làm biểu tượng chính cho AnomalyRecord nếu cần
+    main_chart = chart_scatter or chart_score
+
     for rec in findings.anomalies:
         if rec.issue_type == "OUTLIER_ENSEMBLE":
-            rec.diagnostic_chart = chart
+            rec.diagnostic_chart = main_chart
+            
+    # Inject vào overview_charts để html_merger có thể render trong tab bảng
+    current = findings.dataset_meta.overview_charts or {}
+    updates = {}
+    if chart_score:
+        updates["outlier_score_bar"] = chart_score
+    if chart_scatter:
+        updates["outlier_scatter"] = chart_scatter
+        
+    findings.dataset_meta.overview_charts = {**current, **updates}
     return findings
 
 

@@ -454,6 +454,8 @@ _CHART_COPY = {
     "stacked_bar_issues": ("Issues by Table", "Phân bổ vấn đề theo bảng và mức độ nghiêm trọng."),
     "relationship_network": ("Table Network", "Sơ đồ mối quan hệ giữa các bảng (FK/PK)."),
     "top_correlations_bar": ("Top Correlations", "Top 10 cặp cột có tương quan mạnh nhất."),
+    # Outlier score bar — hiển thị riêng trong tab từng bảng, KHÔNG vào gallery tổng quan
+    "outlier_score_bar": ("Outlier Score", "Biểu đồ Anomaly Score của các dòng bất thường."),
 }
 
 
@@ -496,6 +498,9 @@ def _overview_chart_gallery(verdict: DatasetVerdict) -> str:
         except ValueError:
             rank = len(preferred)
         return rank, key
+
+    # outlier_score_bar được hiển thị riêng trong tab bảng — loại ra khỏi gallery tổng quan
+    charts = {k: v for k, v in charts.items() if k != "outlier_score_bar" and not k.endswith(".outlier_score_bar")}
 
     cards = []
     for chart_key, chart_path in sorted(charts.items(), key=sort_key)[:18]:
@@ -1119,6 +1124,7 @@ def _structured_table_result_card(
     result: object,
     chart_paths: dict[str, str] | None = None,
     col_stats: dict | None = None,
+    outlier_html: str = "",
 ) -> str:
     """Render AnalystTableResult thành HTML card — nhúng chart và stats cùng chỗ."""
     from reporting.l4_report import render_table_result_html
@@ -1126,6 +1132,7 @@ def _structured_table_result_card(
         result,  # type: ignore[arg-type]
         chart_paths=chart_paths or {},
         col_stats=col_stats or {},
+        outlier_html=outlier_html,
     )
 
 
@@ -1254,6 +1261,153 @@ def _build_data_sample_html(df: object, table_name: str, n_rows: int = 5) -> str
         return ""
 
 
+def _outlier_section_for_table(
+    table_name: str,
+    chart_paths: dict[str, str],
+    verdict_top_issues: list,
+) -> str:
+    """Render section Outlier Diagnostic cho 1 bảng — bao gồm đơn biến và đa biến.
+
+    Bao gồm:
+      - Box Plot (univariate, nếu có)
+      - Outlier score bar chart (multivariate, nếu có)
+      - Scatter chart (nếu có)
+      - Mini bảng tóm tắt OUTLIER_ENSEMBLE issues
+    """
+    box_path = chart_paths.get("numeric_boxplot")
+    score_path = chart_paths.get("outlier_score_bar")
+    scatter_path = chart_paths.get("outlier_scatter")
+    
+    # Lọc issues OUTLIER_ENSEMBLE thuộc bảng này
+    outlier_issues = [
+        issue for issue in (verdict_top_issues or [])
+        if issue.issue_type == "OUTLIER_ENSEMBLE"
+        and (issue.affected_table == table_name
+             or (issue.affected_column or "").startswith(table_name + ".")
+             or (issue.affected_column or "") == table_name)
+    ]
+    if not box_path and not score_path and not scatter_path and not outlier_issues:
+        return ""
+
+    parts: list[str] = [
+        '<section class="ai-section outlier-diagnostic-section" style="margin-bottom:24px;">',
+        '<div class="section-heading">',
+        '<p class="eyebrow">Outlier Detection — PyOD Ensemble</p>',
+        f'<h3>Phát Hiện Điểm Bất Thường — <code>{html.escape(table_name)}</code></h3>',
+        '</div>',
+    ]
+
+    # Phần 1: Box Plot (Univariate)
+    if box_path:
+        parts.append(
+            '<div class="chart-card chart-card-wide" style="margin-bottom:16px;">'
+            '<div class="chart-card-copy">'
+            '<strong>Phân Phối Đơn Biến (Box Plot)</strong>'
+            '<p>Hiển thị các điểm giá trị cực đoan cho từng cột độc lập. Các chấm nằm ngoài đuôi biểu đồ là các Outlier đơn biến.</p>'
+            '</div>'
+            f'<div class="chart-frame">'
+            f'<img src="{html.escape(box_path, quote=True)}" '
+            f'alt="Box Plot — {html.escape(table_name)}" loading="lazy">'
+            '</div>'
+            '</div>'
+        )
+
+    # Phần 2: Charts đa biến (Score Bar và Scatter)
+    if score_path or scatter_path:
+        parts.append('<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 16px; margin-bottom: 16px;">')
+        
+        if score_path:
+            parts.append(
+                '<div class="chart-card">'
+                '<div class="chart-card-copy">'
+                '<strong>Outlier Score Bar (Top 50)</strong>'
+                '<p>Mức độ bất thường (Anomaly score) của các dòng. Cột dài hơn = Mức độ lỗi nghiêm trọng hơn.</p>'
+                '</div>'
+                f'<div class="chart-frame">'
+                f'<img src="{html.escape(score_path, quote=True)}" '
+                f'alt="Outlier score bar — {html.escape(table_name)}" loading="lazy">'
+                '</div>'
+                '</div>'
+            )
+            
+        if scatter_path:
+            parts.append(
+                '<div class="chart-card">'
+                '<div class="chart-card-copy">'
+                '<strong>Outlier Scatter (2 Cột biến thiên cao nhất)</strong>'
+                '<p>Chấm <span style="color:#d93025;font-weight:600;">đỏ</span> = dòng bị đánh dấu outlier (bởi IForest + LOF + ECOD).</p>'
+                '</div>'
+                f'<div class="chart-frame">'
+                f'<img src="{html.escape(scatter_path, quote=True)}" '
+                f'alt="Outlier scatter — {html.escape(table_name)}" loading="lazy">'
+                '</div>'
+                '</div>'
+            )
+        parts.append('</div>')
+
+    # Mini bảng OUTLIER_ENSEMBLE
+    if outlier_issues:
+        rows_html = ""
+        for issue in outlier_issues:
+            sev = issue.effective_severity.value
+            sev_key = sev.lower()
+            n_affected = _format_int(issue.affected_count)
+            conf = f"{issue.confidence:.3f}" if issue.confidence is not None else "—"
+            rationale = html.escape(issue.rationale or "—")
+            rows_html += (
+                f'<tr class="severity-row-{html.escape(sev_key)}">'
+                f'<td><span class="badge-{html.escape(sev_key)}">{html.escape(sev)}</span></td>'
+                f'<td class="number-cell">{n_affected}</td>'
+                f'<td class="number-cell">{conf}</td>'
+                f'<td class="rationale-cell">{rationale}</td>'
+                f'</tr>'
+            )
+        parts.append(
+            '<div class="table-scroll-wrapper">'
+            '<table class="issue-spotlight-table">'
+            '<thead><tr>'
+            '<th>Mức độ</th><th>Số dòng bất thường</th><th>Độ tin cậy</th><th>Ghi chú</th>'
+            '</tr></thead>'
+            f'<tbody>{rows_html}</tbody>'
+            '</table></div>'
+        )
+
+        # Render top 10 samples for the first outlier issue
+        top_samples = getattr(outlier_issues[0], "top_10_samples", [])
+        if top_samples:
+            parts.append('<h4 style="margin-top: 16px; font-size: 14px; color: #4b5563;">Top Outlier Rows Sample</h4>')
+            
+            # Extract column headers dynamically from the first sample
+            headers = list(top_samples[0].keys())
+            th_cells = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
+            
+            sample_rows_html = ""
+            for sample in top_samples:
+                td_cells = ""
+                for h in headers:
+                    val = sample.get(h, "")
+                    td_cells += f"<td>{html.escape(str(val))}</td>"
+                sample_rows_html += f"<tr>{td_cells}</tr>"
+
+            parts.append(
+                '<div class="table-scroll-wrapper">'
+                '<table class="data-sample-table" style="font-size: 12px;">'
+                f'<thead><tr>{th_cells}</tr></thead>'
+                f'<tbody>{sample_rows_html}</tbody>'
+                '</table></div>'
+            )
+
+        parts.append(
+            '<p style="color:var(--text-secondary);font-size:12px;margin-top:8px;">'
+            '⬇️ Chi tiết toàn bộ dòng outlier nằm trong file CSV xuất kèm report (tên file kết thúc bằng '
+            '<code>__outlier_rows.csv</code>).'
+            '</p>'
+        )
+
+    parts.append('</section>')
+    return "\n".join(parts)
+
+
 def _table_tab_panel(
     table_result: object,
     tab_id: str,
@@ -1262,6 +1416,7 @@ def _table_tab_panel(
     findings_columns: dict | None,
     is_active: bool = False,
     table_data_samples: dict[str, str] | None = None,
+    verdict: object = None,
 ) -> str:
     """Render nội dung 1 tab bảng: AI insights trước, YData stats ở dưới."""
     table_name: str = getattr(table_result, "table_name", "")
@@ -1288,6 +1443,10 @@ def _table_tab_panel(
 
     profile_file = _lookup_profile(table_name) or profile_links.get("dataset")
 
+    # Outlier diagnostic section (chart + mini bảng)
+    top_issues = getattr(verdict, "top_issues", []) if verdict is not None else []
+    outlier_html = _outlier_section_for_table(table_name, chart_paths, top_issues)
+
     # YData profile section — đặt ở DƯỚI phần AI analysis
     ydata_section = ""
     if profile_file:
@@ -1309,7 +1468,7 @@ def _table_tab_panel(
 
     sample_html = (table_data_samples or {}).get(table_name, "")
 
-    content = _structured_table_result_card(table_result, chart_paths, col_stats)
+    content = _structured_table_result_card(table_result, chart_paths, col_stats, outlier_html=outlier_html)
     active_attr = ' class="tab-content active"' if is_active else ' class="tab-content"'
     hidden_attr = "" if is_active else " hidden"
     return (
@@ -1320,6 +1479,7 @@ def _table_tab_panel(
         f'{ydata_section}'
         f'</section>'
     )
+
 
 
 def _missingness_diagnostic_table(findings: object) -> str:
@@ -1357,8 +1517,8 @@ def _missingness_diagnostic_table(findings: object) -> str:
             ),
             "STRUCTURAL_ABSENT": (
                 "cstat-structural",
-                "OPTIONAL 🔵",
-                "Cột tùy chọn — NULL có thể có nghĩa 'không áp dụng' (vd: Fax, Company). "
+                "STRUCTURAL 🏗️",
+                "Cột tùy chọn (Structural Absent) — NULL có thể có nghĩa 'không áp dụng' (vd: Fax, Company). "
                 "KHÔNG nên impute. Xác nhận với chủ sở hữu dữ liệu trước khi xử lý.",
             ),
         }
@@ -1708,12 +1868,7 @@ def _build_user_guide_html() -> str:
           <td>Classifier AUC thấp (≈0.5): không có pattern nào dự đoán được</td>
           <td>✅ An toàn khi dùng mean/median hoặc mode. Listwise deletion ít ảnh hưởng bias</td>
         </tr>
-        <tr>
-          <td><span class="cstat-pill cstat-mnar" style="background:#7c3aed;color:#fff;">MNAR ⛔</span></td>
-          <td><strong>Missing Not At Random</strong> — giá trị thiếu liên quan đến <em>chính giá trị đó</em> (ví dụ: lương cao thường bỏ trống)</td>
-          <td>Không thể phát hiện chắc chắn từ data — cần domain knowledge. Thường xuất hiện ở dữ liệu self-reported</td>
-          <td>⛔ Không được impute naively — sẽ tạo bias hệ thống. Cần collect thêm dữ liệu hoặc mô hình hoá MNAR explicitly</td>
-        </tr>
+
         <tr>
           <td><span class="cstat-pill cstat-structural" style="background:#0369a1;color:#fff;">STRUCTURAL 🏗️</span></td>
           <td><strong>Structural Absent</strong> — cột được thiết kế để trống theo business logic (ví dụ: cột <code>fax</code> trong bảng <code>customer</code>)</td>
@@ -1740,96 +1895,114 @@ def _build_user_guide_html() -> str:
     <div class="table-scroll-wrapper">
     <table class="issue-spotlight-table">
       <thead><tr>
-        <th>Loại vấn đề</th><th>Cách phát hiện</th><th>Ảnh hưởng phân tích</th>
+        <th>Loại vấn đề</th><th>Ý nghĩa</th><th>Cách phát hiện</th><th>Ảnh hưởng phân tích</th>
       </tr></thead>
       <tbody>
         <tr>
           <td><code>PK_DUPLICATE</code></td>
+          <td>Giá trị trong cột Khóa chính (Primary Key) bị trùng lặp</td>
           <td>Đếm giá trị trùng trên cột được khai báo là Primary Key</td>
           <td>JOIN nhân rows, aggregation sai, entity identity bị phá vỡ</td>
         </tr>
         <tr>
           <td><code>COMPOSITE_PK_DUPLICATE</code></td>
+          <td>Tổ hợp các cột tạo thành khóa chính (ví dụ: A+B) bị trùng lặp</td>
           <td>Kiểm tra uniqueness của tổ hợp (col1, col2) trong junction table</td>
           <td>Vi phạm uniqueness constraint, JOIN cho kết quả sai</td>
         </tr>
         <tr>
           <td><code>PK_NULL</code></td>
+          <td>Giá trị trong cột Khóa chính (Primary Key) bị rỗng (NULL)</td>
           <td>Kiểm tra NULL trên cột Primary Key</td>
           <td>Không thể identify entity, JOIN bị mất dữ liệu</td>
         </tr>
         <tr>
           <td><code>ORPHAN_FOREIGN_KEY</code></td>
+          <td>Khóa ngoại tham chiếu đến một bản ghi không tồn tại trong bảng cha</td>
           <td>Left join bảng con sang bảng cha, đếm rows không match</td>
           <td>JOIN trả về NULL hoặc mất dữ liệu, aggregation thiếu</td>
         </tr>
         <tr>
           <td><code>NON_UNIQUE_PARENT_PK</code></td>
+          <td>Khóa chính của bảng cha (được tham chiếu tới) không duy nhất</td>
           <td>Kiểm tra uniqueness của PK trong bảng cha được tham chiếu</td>
           <td>JOIN nhân rows phía child, tạo Cartesian product ngầm</td>
         </tr>
         <tr>
           <td><code>HIGH_MISSING_RATE</code></td>
+          <td>Cột có tỷ lệ dữ liệu bị trống (NULL/NaN) quá cao</td>
           <td>% giá trị null vượt ngưỡng (mặc định 30%)</td>
           <td>Bias trong model, kết quả thống kê không đại diện</td>
         </tr>
         <tr>
           <td><code>HIGH_CARDINALITY</code></td>
+          <td>Cột danh mục (Categorical) có quá nhiều giá trị phân biệt khác nhau</td>
           <td>Số giá trị distinct quá cao so với n_rows (thường &gt;50%)</td>
           <td>One-hot encoding không hiệu quả, có thể là ID column bị nhầm</td>
         </tr>
         <tr>
           <td><code>LOW_VARIANCE / CONSTANT</code></td>
+          <td>Cột hầu như không có sự biến thiên (giá trị gần như giống hệt nhau)</td>
           <td>Std ≈ 0 hoặc chỉ có 1 giá trị duy nhất</td>
           <td>Feature vô dụng trong ML, cần loại bỏ</td>
         </tr>
         <tr>
           <td><code>CONSTANT_COLUMN</code></td>
+          <td>Cột chỉ chứa duy nhất một giá trị cho toàn bộ tập dữ liệu</td>
           <td>Tất cả giá trị trong cột giống hệt nhau (variance = 0)</td>
           <td>Zero information content, luôn nên loại khỏi feature set</td>
         </tr>
         <tr>
           <td><code>OUTLIER_RATE_HIGH</code></td>
+          <td>Cột chứa lượng lớn các điểm dữ liệu dị biệt (ngoại lệ) khác thường</td>
           <td>PyOD ensemble (IForest + LOF + CBLOF) detect điểm bất thường</td>
           <td>Skew distribution, ảnh hưởng mean/std, model bị kéo lệch</td>
         </tr>
         <tr>
           <td><code>SKEWNESS_HIGH</code></td>
+          <td>Phân phối của cột bị lệch hẳn về một phía (không đối xứng)</td>
           <td>|skewness| &gt; 2 hoặc |kurtosis| &gt; 7</td>
           <td>Cần log-transform hoặc box-cox trước khi đưa vào linear model</td>
         </tr>
         <tr>
           <td><code>DUPLICATE_ROWS</code></td>
+          <td>Toàn bộ thông tin trên một dòng (row) giống hệt với các dòng khác</td>
           <td>Hash toàn bộ row, đếm duplicate &gt; ngưỡng</td>
           <td>Overfit, bias trong tập train nếu không loại trước split</td>
         </tr>
         <tr>
           <td><code>TYPE_MISMATCH</code></td>
+          <td>Kiểu dữ liệu thực tế không khớp với lược đồ (Schema) khai báo</td>
           <td>Schema DBML/SQL khai báo type khác với type thực tế suy ra</td>
           <td>Silent error trong pipeline downstream, parse fail ở production</td>
         </tr>
         <tr>
           <td><code>NOT_NULL_VIOLATION</code></td>
+          <td>Cột chứa giá trị rỗng dù được cấu hình là bắt buộc (NOT NULL)</td>
           <td>Cột được khai báo NOT NULL nhưng có giá trị null trong thực tế</td>
           <td>Vi phạm contract dữ liệu, downstream sẽ fail nếu enforce NOT NULL</td>
         </tr>
         <tr>
           <td><code>UNIQUE_VIOLATION</code></td>
+          <td>Cột chứa giá trị trùng lặp dù được cấu hình là phải duy nhất (UNIQUE)</td>
           <td>Cột được khai báo UNIQUE nhưng có giá trị trùng lặp</td>
           <td>Vi phạm constraint, có thể là dấu hiệu của lỗi ETL hoặc merge sai</td>
         </tr>
         <tr>
           <td><code>FK_INTEGRITY_VIOLATION</code></td>
+          <td>Sự liên kết dữ liệu giữa bảng cha và bảng con bị đứt gãy do không khớp mã</td>
           <td>Foreign key không match giữa bảng con và bảng cha</td>
           <td>JOIN trả về NULL rows, aggregation sai, report thiếu dữ liệu</td>
         </tr>
         <tr>
           <td><code>PATTERN_ANOMALY</code></td>
+          <td>Dữ liệu không tuân theo định dạng chuẩn (như email, số điện thoại)</td>
           <td>Regex/format check (email, phone, date) — tỉ lệ fail cao</td>
           <td>Dữ liệu thô cần normalize/validate trước downstream</td>
         </tr>
         <tr>
           <td><code>INCONSISTENT_FORMAT</code></td>
+          <td>Cột chứa nhiều định dạng dữ liệu khác nhau lẫn lộn (vd: định dạng ngày)</td>
           <td>Phát hiện hỗn hợp format trong cùng một cột (date format, encoding)</td>
           <td>Parse error, silent data loss khi xử lý hàng loạt</td>
         </tr>
@@ -1975,6 +2148,7 @@ def merge_to_tabbed_html(
                 findings_columns=findings_columns,
                 is_active=False,
                 table_data_samples=table_data_samples,
+                verdict=verdict,
             )
         )
     # Track which tables already have AI analysis (normalize for fuzzy match)

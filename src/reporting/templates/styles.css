@@ -2726,3 +2726,27 @@ tr:last-child td {
   border-left-color: #f59e0b;
   background: #fff7ed;
 }
+
+/* ── Outlier Diagnostic Section (per-table tab) ─────────────────────── */
+.outlier-diagnostic-section {
+  border: 1px solid #fecaca;
+  background: #fff8f8;
+  border-radius: var(--radius);
+  padding: 20px 24px;
+}
+.outlier-diagnostic-section .section-heading h3 {
+  font-size: 17px;
+  margin: 0 0 4px;
+  color: #b91c1c;
+}
+.outlier-diagnostic-section .section-heading .eyebrow {
+  color: #ef4444;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.chart-card-wide {
+  grid-column: 1 / -1;
+}
